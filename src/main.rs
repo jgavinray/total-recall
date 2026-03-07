@@ -4,6 +4,8 @@ mod mcp;
 mod memory;
 
 use clap::{Parser, Subcommand};
+use rust_mcp_sdk::mcp_server::server_runtime::ServerRuntime;
+use rust_mcp_sdk::server_runtime::stdio::StdioTransport;
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -120,21 +122,11 @@ async fn run_mcp_server(config: &config::Config) -> Result<(), Box<dyn std::erro
         Ok(store) => {
             tracing::info!("Starting MCP server via stdio...");
 
-            match mcp::server::MemoryMcpServer::new(store, config.memory_dir.clone()) {
-                Ok(server) => {
-                    tracing::info!("Memory store initialized at {:?}", config.db_path);
-                    tokio::io::copy(
-                        &mut tokio::io::stdin().lock(),
-                        &mut mcp::server::Server::<mcp::server::InMemoryTransport<_>>::new(server)
-                            .run()
-                            .await?,
-                    )
-                    .await?;
-                }
-                Err(e) => {
-                    eprintln!("Failed to create MCP server: {}", e);
-                }
-            }
+            let server = mcp::server::MemoryMcpServer::new(store, config.memory_dir.clone())?;
+            let runtime = ServerRuntime::new(server, StdioTransport::new());
+
+            tracing::info!("Memory store initialized at {:?}", config.db_path);
+            runtime.run().await?;
         }
         Err(e) => {
             eprintln!("Failed to initialize database at {:?}: {}", config.db_path, e);

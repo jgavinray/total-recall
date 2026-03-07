@@ -183,19 +183,36 @@ impl MemoryStore {
         )?;
 
         let obs_rows = stmt.query_map([date], |row| {
+            let id: String = row.get(0)?;
+            let note_id: String = row.get(1)?;
+            let timestamp: String = row.get(2)?;
+            let section: Option<String> = row.get(3)?;
+            let category: Option<String> = row.get(4)?;
+            let content: String = row.get(5)?;
+            let full_context: String = row.get(6)?;
+            let tags_json: String = row.get(7)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+
             Ok(Observation {
-                id: row.get(0)?,
-                note_id: row.get(1)?,
-                timestamp: row.get(2)?,
-                section: row.get::<_, Option<String>>(3)?,
-                category: row.get::<_, Option<String>>(4)?,
-                content: row.get(5)?,
-                full_context: row.get(6)?,
-                tags: row.get::<_, Vec<String>>(7)?,
+                id,
+                note_id,
+                timestamp,
+                section,
+                category,
+                content,
+                full_context,
+                tags,
             })
         })?;
 
-        obs_rows.collect()
+        obs_rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| {
+                crate::error::MemoryError::ParseError(format!(
+                    "Failed to parse observations: {}",
+                    e
+                ))
+            })
     }
 
     pub fn archive_note(&self, date: &str) -> Result<()> {
@@ -240,13 +257,13 @@ impl MemoryStore {
 
         let mut notes = Vec::new();
         for row in note_rows {
-            let (id, date, title, content, created_at, updated_at, archived) = row?;
+            let (id, date_str, title, content, created_at, updated_at, archived) = row?;
             notes.push(Note {
                 id,
-                date,
+                date: date_str.clone(),
                 metadata: NoteMetadata {
                     title: title.clone(),
-                    date: Some(date.clone()),
+                    date: Some(date_str),
                     r#type: None,
                     tags: None,
                     archived: Some(archived > 0),
@@ -294,34 +311,29 @@ impl MemoryStore {
 
         let mut stmt = self.connection.prepare(query)?;
 
-        let note_rows = stmt.query_map(
-            [
-                serde_json::to_string(query_embedding)
-                    .map_err(|e| MemoryError::Embedding(e.to_string()))?,
-                limit as i64,
-                limit as i64,
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                ))
-            },
-        )?;
+        let embedding_json = serde_json::to_string(query_embedding)
+            .map_err(|e| MemoryError::Embedding(e.to_string()))?;
+
+        let note_rows = stmt.query_map([embedding_json, limit as i64, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })?;
 
         let mut notes = Vec::new();
         for row in note_rows {
-            let (id, date, title, content, updated_at, archived) = row?;
+            let (id, date_str, title, content, updated_at, archived) = row?;
             notes.push(Note {
                 id,
-                date,
+                date: date_str.clone(),
                 metadata: NoteMetadata {
                     title: title.clone(),
-                    date: Some(date.clone()),
+                    date: Some(date_str),
                     r#type: None,
                     tags: None,
                     archived: Some(archived > 0),

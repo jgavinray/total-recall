@@ -1,11 +1,13 @@
 use crate::error::Result;
 use crate::memory::embedder::Embedder;
 use crate::memory::store::MemoryStore;
-use crate::memory::models::{Note, NoteMetadata};
 use async_trait::async_trait;
-use mcp::server::{Server, ServerHandler};
-use mcp::tools::{ListToolsResult, CallToolResult, Tool};
-use serde_json::json;
+use rust_mcp_sdk::mcp_server::ServerHandler;
+use rust_mcp_sdk::schema::{Tool, ToolInputSchema, ToolResult};
+use rust_mcp_sdk::server_runtime::server_runtime::ServerRuntime;
+use rust_mcp_sdk::server_runtime::stdio::StdioTransport;
+use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -25,173 +27,132 @@ impl MemoryMcpServer {
         })
     }
 
-    pub async fn list_tools(&self) -> ListToolsResult {
-        let tools = vec![
+    fn create_tools() -> Vec<Tool> {
+        vec![
             Tool {
                 name: "write_note".to_string(),
-                description: "Create a new memory note. Returns error if date already exists (immutability enforced).".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "content": {
-                            "type": "string",
-                            "description": "The note content in markdown format"
-                        },
-                        "timestamp": {
-                            "type": "string",
-                            "description": "Optional timestamp section header (e.g., '14:30')"
-                        }
-                    },
-                    "required": ["content"]
-                }),
+                description: Some("Create a new memory note. Returns error if date already exists (immutability enforced).".to_string()),
+                input_schema: Self::create_tool_input_schema(vec!["content"], Some(Self::create_properties())),
+                ..Default::default()
             },
             Tool {
                 name: "read_note".to_string(),
-                description: "Read a note by date in mm/dd/yyyy format".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "date": {
-                            "type": "string",
-                            "description": "Date in mm/dd/yyyy format"
-                        }
-                    },
-                    "required": ["date"]
-                }),
+                description: Some("Read a note by date in mm-dd-yyyy format".to_string()),
+                input_schema: Self::create_tool_input_schema(vec!["date"], Some(Self::create_date_properties())),
+                ..Default::default()
             },
             Tool {
                 name: "search_notes".to_string(),
-                description: "Search notes using semantic vector similarity".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query text"
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of results",
-                            "default": 10
-                        },
-                        "include_archived": {
-                            "type": "boolean",
-                            "description": "Include archived notes",
-                            "default": false
-                        }
-                    },
-                    "required": ["query"]
-                }),
+                description: Some("Search notes using semantic vector similarity".to_string()),
+                input_schema: Self::create_tool_input_schema(vec!["query"], Some(Self::create_search_properties())),
+                ..Default::default()
             },
             Tool {
                 name: "recent_notes".to_string(),
-                description: "Get notes from the last N days, excluding archived by default".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "limit": {
-                            "type": "integer",
-                            "default": 10
-                        },
-                        "days": {
-                            "type": "integer",
-                            "default": 7
-                        },
-                        "include_archived": {
-                            "type": "boolean",
-                            "default": false
-                        }
-                    }
-                }),
+                description: Some("Get notes from the last N days, excluding archived by default".to_string()),
+                input_schema: Self::create_tool_input_schema(vec![], Some(Self::create_recent_properties())),
+                ..Default::default()
             },
             Tool {
                 name: "build_context".to_string(),
-                description: "Get all observations from a specific date with semantic context".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "date": {
-                            "type": "string",
-                            "description": "Date in mm/dd/yyyy format"
-                        },
-                        "category_filter": {
-                            "type": "string",
-                            "description": "Optional filter by category (decision, action, note, idea, question, risk)"
-                        }
-                    },
-                    "required": ["date"]
-                }),
+                description: Some("Get all observations from a specific date with semantic context".to_string()),
+                input_schema: Self::create_tool_input_schema(vec!["date"], Some(Self::create_context_properties())),
+                ..Default::default()
             },
-        ];
+        ]
+    }
 
-        ListToolsResult { tools }
+    fn create_properties() -> HashMap<String, Map<String, Value>> {
+        let mut properties = Map::new();
+        properties.insert(
+            "content".to_string(),
+            json!({
+                "type": "string",
+                "description": "The note content in markdown format"
+            }),
+        );
+        properties.insert(
+            "timestamp".to_string(),
+            json!({
+                "type": "string",
+                "description": "Optional timestamp section header (e.g., '14:30')"
+            }),
+        );
+        HashMap::from([("content".to_string(), json!({"type": "string", "description": "The note content in markdown format"}))])
+    }
+
+    fn create_date_properties() -> HashMap<String, Map<String, Value>> {
+        HashMap::from([("date".to_string(), json!({"type": "string", "description": "Date in mm-dd-yyyy format"}))])
+    }
+
+    fn create_search_properties() -> HashMap<String, Map<String, Value>> {
+        HashMap::from([
+            ("query".to_string(), json!({"type": "string", "description": "Search query text"})),
+            ("limit".to_string(), json!({"type": "integer", "description": "Maximum number of results", "default": 10})),
+            ("include_archived".to_string(), json!({"type": "boolean", "description": "Include archived notes", "default": false})),
+        ])
+    }
+
+    fn create_recent_properties() -> HashMap<String, Map<String, Value>> {
+        HashMap::from([
+            ("limit".to_string(), json!({"type": "integer", "default": 10})),
+            ("days".to_string(), json!({"type": "integer", "default": 7})),
+            ("include_archived".to_string(), json!({"type": "boolean", "default": false})),
+        ])
+    }
+
+    fn create_context_properties() -> HashMap<String, Map<String, Value>> {
+        HashMap::from([
+            ("date".to_string(), json!({"type": "string", "description": "Date in mm-dd-yyyy format"})),
+            ("category_filter".to_string(), json!({"type": "string", "description": "Optional filter by category (decision, action, note, idea, question, risk)"})),
+        ])
+    }
+
+    fn create_tool_input_schema(
+        required: Vec<String>,
+        properties: Option<HashMap<String, Map<String, Value>>>,
+    ) -> ToolInputSchema {
+        ToolInputSchema::new(
+            required,
+            properties,
+            Some("https://json-schema.org/draft/2020-12/schema".to_string()),
+        )
     }
 }
 
 #[async_trait]
 impl ServerHandler for MemoryMcpServer {
-    type Error = crate::error::MemoryError;
-    type ToolExecutor = Server<Self>;
-
-    async fn initialize(&self, _client_version: &str) -> mcp::protocol::InitializeResult {
-        mcp::protocol::InitializeResult {
-            protocol_version: "2024-11-05".to_string(),
-            server_info: mcp::protocol::Implementation {
-                name: "total-recall".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
-            capabilities: mcp::protocol::ServerCapabilities {
-                tools: Some(mcp::protocol::ToolsCapability::ListChanged),
-                ..Default::default()
-            },
-            instructions: Some("Agentic memory system. Use write_note to record thoughts, search_notes for semantic search, recent_notes for recent activity.".to_string()),
-        }
+    fn name(&self) -> &'static str {
+        "total-recall"
     }
 
-    async fn list_tools(&self) -> ListToolsResult {
-        self.list_tools().await
+    fn version(&self) -> &'static str {
+        env!("CARGO_PKG_VERSION")
     }
 
-    async fn call_tool(
-        &self,
-        name: &str,
-        arguments: serde_json::Value,
-    ) -> Result<CallToolResult, Self::Error> {
-        match name {
-            "write_note" => self.call_write_note(arguments).await,
-            "read_note" => self.call_read_note(arguments).await,
-            "search_notes" => self.call_search_notes(arguments).await,
-            "recent_notes" => self.call_recent_notes(arguments).await,
-            "build_context" => self.call_build_context(arguments).await,
-            _ => Err(crate::error::MemoryError::NotFound(format!("Unknown tool: {}", name))),
-        }
+    fn description(&self) -> &'static str {
+        "Agentic memory system. Use write_note to record thoughts, search_notes for semantic search, recent_notes for recent activity."
+    }
+
+    async fn list_tools(&self) -> ToolResult {
+        Ok(Self::create_tools())
     }
 }
 
 impl MemoryMcpServer {
-    async fn call_write_note(&self, arguments: serde_json::Value) -> Result<CallToolResult> {
+    async fn call_write_note(&self, arguments: Value) -> String {
         let args = match arguments.as_object() {
             Some(obj) => obj,
-            None => return Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: "Invalid arguments: expected object".to_string(),
-                }],
-                is_error: Some(true),
-            }),
+            None => return "Invalid arguments: expected object".to_string(),
         };
 
         let content = match args.get("content").and_then(|v| v.as_str()) {
             Some(c) => c,
-            None => return Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: "Missing required field: content".to_string(),
-                }],
-                is_error: Some(true),
-            }),
+            None => return "Missing required field: content".to_string(),
         };
 
         let timestamp = args.get("timestamp").and_then(|v| v.as_str());
-        let current_date = chrono::Utc::now().format("%m/%d/%Y").to_string();
+        let current_date = chrono::Utc::now().format("%m-%d-%Y").to_string();
 
         let final_content = if let Some(ts) = timestamp {
             format!("## {}\n\n{}", ts, content)
@@ -202,46 +163,23 @@ impl MemoryMcpServer {
         let store = self.store.read().await;
 
         match store.create_note(&current_date, &final_content) {
-            Ok(_) => Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: format!("Successfully created note for {}", current_date),
-                }],
-                is_error: Some(false),
-            }),
-            Err(crate::error::MemoryError::FileExistsError(_)) => Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: format!("Note for {} already exists (immutability enforced). Use append or a different date.", current_date),
-                }],
-                is_error: Some(true),
-            }),
-            Err(e) => Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: format!("Error creating note: {}", e),
-                }],
-                is_error: Some(true),
-            }),
+            Ok(_) => format!("Successfully created note for {}", current_date),
+            Err(crate::error::MemoryError::FileExistsError(_)) => {
+                format!("Note for {} already exists (immutability enforced). Use append or a different date.", current_date)
+            },
+            Err(e) => format!("Error creating note: {}", e),
         }
     }
 
-    async fn call_read_note(&self, arguments: serde_json::Value) -> Result<CallToolResult> {
+    async fn call_read_note(&self, arguments: Value) -> String {
         let args = match arguments.as_object() {
             Some(obj) => obj,
-            None => return Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: "Invalid arguments: expected object".to_string(),
-                }],
-                is_error: Some(true),
-            }),
+            None => return "Invalid arguments: expected object".to_string(),
         };
 
         let date = match args.get("date").and_then(|v| v.as_str()) {
             Some(d) => d,
-            None => return Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: "Missing required field: date".to_string(),
-                }],
-                is_error: Some(true),
-            }),
+            None => return "Missing required field: date".to_string(),
         };
 
         let store = self.store.read().await;
@@ -261,45 +199,24 @@ impl MemoryMcpServer {
                     }
                 }
 
-                Ok(CallToolResult {
-                    content: vec![mcp::protocol::ContentPart::Text { text: output }],
-                    is_error: Some(false),
-                })
+                output
             },
-            Err(crate::error::MemoryError::NotFound(_)) => Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: format!("No note found for date: {}", date),
-                }],
-                is_error: Some(true),
-            }),
-            Err(e) => Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: format!("Error reading note: {}", e),
-                }],
-                is_error: Some(true),
-            }),
+            Err(crate::error::MemoryError::NotFound(_)) => {
+                format!("No note found for date: {}", date)
+            },
+            Err(e) => format!("Error reading note: {}", e),
         }
     }
 
-    async fn call_search_notes(&self, arguments: serde_json::Value) -> Result<CallToolResult> {
+    async fn call_search_notes(&self, arguments: Value) -> String {
         let args = match arguments.as_object() {
             Some(obj) => obj,
-            None => return Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: "Invalid arguments: expected object".to_string(),
-                }],
-                is_error: Some(true),
-            }),
+            None => return "Invalid arguments: expected object".to_string(),
         };
 
         let query = match args.get("query").and_then(|v| v.as_str()) {
             Some(q) => q,
-            None => return Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: "Missing required field: query".to_string(),
-                }],
-                is_error: Some(true),
-            }),
+            None => return "Missing required field: query".to_string(),
         };
 
         let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(10);
@@ -313,7 +230,7 @@ impl MemoryMcpServer {
             Ok(notes) => {
                 let mut output = String::new();
                 if notes.is_empty() {
-                    output = "No notes found matching your query.".to_string();
+                    "No notes found matching your query.".to_string()
                 } else {
                     for note in &notes {
                         output.push_str(&format!(
@@ -323,31 +240,17 @@ impl MemoryMcpServer {
                             note.content.chars().take(300).collect::<String>()
                         ));
                     }
+                    output
                 }
-
-                Ok(CallToolResult {
-                    content: vec![mcp::protocol::ContentPart::Text { text: output }],
-                    is_error: Some(false),
-                })
             },
-            Err(e) => Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: format!("Error searching: {}", e),
-                }],
-                is_error: Some(true),
-            }),
+            Err(e) => format!("Error searching: {}", e),
         }
     }
 
-    async fn call_recent_notes(&self, arguments: serde_json::Value) -> Result<CallToolResult> {
+    async fn call_recent_notes(&self, arguments: Value) -> String {
         let args = match arguments.as_object() {
             Some(obj) => obj,
-            None => return Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: "Invalid arguments: expected object".to_string(),
-                }],
-                is_error: Some(true),
-            }),
+            None => return "Invalid arguments: expected object".to_string(),
         };
 
         let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(10);
@@ -368,40 +271,21 @@ impl MemoryMcpServer {
                         output.push_str(&format!("- **{}** ({})\n", note.date, title));
                     }
                 }
-
-                Ok(CallToolResult {
-                    content: vec![mcp::protocol::ContentPart::Text { text: output }],
-                    is_error: Some(false),
-                })
+                output
             },
-            Err(e) => Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: format!("Error getting recent notes: {}", e),
-                }],
-                is_error: Some(true),
-            }),
+            Err(e) => format!("Error getting recent notes: {}", e),
         }
     }
 
-    async fn call_build_context(&self, arguments: serde_json::Value) -> Result<CallToolResult> {
+    async fn call_build_context(&self, arguments: Value) -> String {
         let args = match arguments.as_object() {
             Some(obj) => obj,
-            None => return Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: "Invalid arguments: expected object".to_string(),
-                }],
-                is_error: Some(true),
-            }),
+            None => return "Invalid arguments: expected object".to_string(),
         };
 
         let date = match args.get("date").and_then(|v| v.as_str()) {
             Some(d) => d,
-            None => return Ok(CallToolResult {
-                content: vec![mcp::protocol::ContentPart::Text {
-                    text: "Missing required field: date".to_string(),
-                }],
-                is_error: Some(true),
-            }),
+            None => return "Missing required field: date".to_string(),
         };
 
         let category_filter = args.get("category_filter").and_then(|v| v.as_str());
@@ -410,20 +294,10 @@ impl MemoryMcpServer {
         let note = match store.read_note(date) {
             Ok(n) => n,
             Err(crate::error::MemoryError::NotFound(_)) => {
-                return Ok(CallToolResult {
-                    content: vec![mcp::protocol::ContentPart::Text {
-                        text: format!("No note found for date: {}", date),
-                    }],
-                    is_error: Some(true),
-                })
+                return format!("No note found for date: {}", date)
             },
             Err(e) => {
-                return Ok(CallToolResult {
-                    content: vec![mcp::protocol::ContentPart::Text {
-                        text: format!("Error reading note: {}", e),
-                    }],
-                    is_error: Some(true),
-                })
+                return format!("Error reading note: {}", e)
             },
         };
 
@@ -457,9 +331,6 @@ impl MemoryMcpServer {
             output.push_str("No observations found in this note.\n");
         }
 
-        Ok(CallToolResult {
-            content: vec![mcp::protocol::ContentPart::Text { text: output }],
-            is_error: Some(false),
-        })
+        output
     }
 }
