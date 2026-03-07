@@ -1,0 +1,42 @@
+# Total-Recall Configuration
+# Copy this file to ~/.total-recall/config.yaml and customize
+
+# Memory directory (default: ~/.total-recall)
+# This contains all mm-dd-yyyy.md files organized by mm-yyyy/ subdirectories
+memory_dir: ~/.total-recall
+
+# SQLite database path (default: memory_dir/memory.db)
+# Stores notes metadata, observations, and vector embeddings
+db_path: ~/.total-recall/memory.db
+
+# Logging configuration
+logging:
+  level: info           # debug, info, warn, error
+  file: ~/.total-recall/logs/server.log
+  max_size_mb: 10
+  backup_count: 3
+
+# Embedding model settings
+embedding:
+  model: sentence-transformers/all-MiniLM-L6-v2
+  dimension: 384
+  cache_dir: ~/.total-recall/models
+
+# Search settings
+search:
+  default_limit: 10     # Default results for search_notes
+  max_limit: 100        # Hard maximum for any search
+  similarity_threshold: 0.7  # Min cosine similarity for results
+
+# MCP server settings
+mcp:
+  enabled: true
+  stdio: true
+  timeout_seconds: 30
+
+# Optional: Enable experimental features
+features:
+  # Enable auto-generating backlinks between related notes
+  auto_links: false
+  # Enable scheduled backups
+  backups: false

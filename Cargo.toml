@@ -1,0 +1,77 @@
+[package]
+name = "total-recall"
+version = "0.1.0"
+edition = "2024"
+authors = ["J. Gavin Ray"]
+description = "Agentic memory MCP server with SQLite + vector search + markdown files"
+license = "MIT"
+repository = "https://github.com/jgavinray/total-recall"
+build = "build.rs"
+
+[dependencies]
+# MCP SDK
+mcp = "0.12"
+
+# Async runtime
+tokio = { version = "1.46", features = ["full", "rt-multi-thread", "macros", "sync", "time"] }
+
+# SQLite with vector support
+rusqlite = { version = "0.34", features = ["bundled", "vfs"] }
+
+# ONNX for embeddings
+ort = "2.0"
+ort-extras = "2.0"
+
+# Async SQLite
+deadpool-sqlite = "0.11"
+
+# Markdown parsing
+pulldown-cmark = "0.12"
+pragmagh = "0.1"
+
+# YAML config & frontmatter
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# UUID for timestamps
+uuid = { version = "1.17", features = ["v4", "serde"] }
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# File watching
+notify = "8.2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Paths & dirs
+dirs = "6.0"
+once_cell = "1.21"
+
+# Vector operations
+ndarray = "0.16"
+
+# Async trait
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3.21"
+tokio-test = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+
+[build-dependencies]
+# For building sqlite-vec extension
+cc = "1.2"
