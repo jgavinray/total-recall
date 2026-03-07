@@ -1,0 +1,60 @@
+# Rust
+/target
+**/target/
+debug/
+release/
+*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Dependencies
+*.so
+*.dylib
+*.a
+*.lib
+
+# Build artifacts (if not in target)
+build/
+
+# SQLite
+memory.db
+memory.db-wal
+memory.db-shm
+*.db
+*.db-journal
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Config (user-specific paths)
+config.yaml
+*.yaml.local
+*.config.local
+
+# Temp files
+*.tmp
+*.temp
+~*
+*~
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Misc
+env/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pycache/

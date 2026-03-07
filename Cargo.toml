@@ -4,30 +4,25 @@ version = "0.1.0"
 edition = "2024"
 authors = ["J. Gavin Ray"]
 description = "Agentic memory MCP server with SQLite + vector search + markdown files"
-license = "MIT"
+license = "GPL-2.0"
 repository = "https://github.com/jgavinray/total-recall"
 build = "build.rs"
 
 [dependencies]
-# MCP SDK
-mcp = "0.12"
+# MCP protocol
+num_enum = "0.7"
 
 # Async runtime
 tokio = { version = "1.46", features = ["full", "rt-multi-thread", "macros", "sync", "time"] }
 
-# SQLite with vector support
-rusqlite = { version = "0.34", features = ["bundled", "vfs"] }
+# SQLite with VSS support (VSS extension loaded at runtime)
+rusqlite = { version = "0.30", features = ["bundled"] }
 
-# ONNX for embeddings
-ort = "2.0"
-ort-extras = "2.0"
-
-# Async SQLite
-deadpool-sqlite = "0.11"
+# ONNX for embeddings (using release candidate until stable 2.0)
+ort = "2.0.0-rc.12"
 
 # Markdown parsing
 pulldown-cmark = "0.12"
-pragmagh = "0.1"
 
 # YAML config & frontmatter
 serde = { version = "1.0", features = ["derive"] }
