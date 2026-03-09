@@ -289,4 +289,64 @@ mod tests {
             "dog should be more similar to puppy ({sim_dog_puppy:.4}) than to invoice ({sim_dog_invoice:.4})"
         );
     }
+
+    /// Verify that embed() is deterministic: same input must produce identical output.
+    #[test]
+    fn test_embed_determinism() {
+        // Safe: Embedder::new() is expected to succeed when model is cached
+        let embedder = Embedder::new().expect("init");
+        let text = "the quick brown fox jumps over the lazy dog";
+        let v1 = embedder.embed(text);
+        let v2 = embedder.embed(text);
+        assert_eq!(v1.len(), v2.len(), "output lengths should match");
+        for (i, (a, b)) in v1.iter().zip(v2.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-6,
+                "dim {i}: expected identical outputs, got {a} vs {b}"
+            );
+        }
+    }
+
+    /// Verify that embed_batch returns embeddings in the same order as the input.
+    #[test]
+    fn test_embed_batch_order() {
+        // Safe: Embedder::new() expected to succeed with cached model
+        let embedder = Embedder::new().expect("init");
+        let texts = ["apple", "banana", "cherry"];
+        let batch = embedder.embed_batch(&texts);
+        assert_eq!(batch.len(), texts.len());
+        // Each embedding individually should match the single-embed result
+        for (i, text) in texts.iter().enumerate() {
+            let single = embedder.embed(text);
+            let sim = embedder.cosine_similarity(&batch[i], &single);
+            assert!(
+                sim > 0.999,
+                "batch[{i}] for '{text}' should match single embed (sim={sim:.4})"
+            );
+        }
+    }
+
+    /// Cosine similarity of a vector with itself must be 1.0 (within float tolerance).
+    #[test]
+    fn test_cosine_similarity_self() {
+        // Safe: Embedder::new() expected to succeed with cached model
+        let embedder = Embedder::new().expect("init");
+        let v = embedder.embed("self-similarity test");
+        let sim = embedder.cosine_similarity(&v, &v);
+        assert!(
+            (sim - 1.0).abs() < 1e-4,
+            "self-similarity should be ~1.0, got {sim}"
+        );
+    }
+
+    /// Cosine similarity of orthogonal unit vectors must be 0.0.
+    #[test]
+    fn test_cosine_similarity_zero() {
+        // Safe: constructing known-orthogonal vectors directly, no I/O involved
+        let embedder = Embedder::new().expect("init");
+        let a = vec![1.0f32, 0.0, 0.0];
+        let b = vec![0.0f32, 1.0, 0.0];
+        let sim = embedder.cosine_similarity(&a, &b);
+        assert!((sim - 0.0).abs() < 1e-6, "orthogonal vectors should have sim=0, got {sim}");
+    }
 }

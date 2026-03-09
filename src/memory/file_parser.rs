@@ -90,3 +90,92 @@ impl FileParser {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_note() -> &'static str {
+        "---\ntitle: Daily Note\n---\n\
+         ## Work\n\
+         ## 10:30\n\
+         - [task] Finished the Rust tests #rust #testing\n\
+         - [note] Reviewed PR for main branch\n\
+         ## 14:00\n\
+         - [idea] Refactor embedder to support batching\n"
+    }
+
+    #[test]
+    fn test_parse_observations_count() {
+        // Safe: sample_note is valid test input; parse_observations is infallible in practice
+        let obs = FileParser::parse_observations(sample_note()).unwrap();
+        assert_eq!(obs.len(), 3, "expected 3 observations from sample note");
+    }
+
+    #[test]
+    fn test_parse_observations_category() {
+        let obs = FileParser::parse_observations(sample_note()).unwrap();
+        assert_eq!(obs[0].category, Some("task".to_string()));
+        assert_eq!(obs[1].category, Some("note".to_string()));
+        assert_eq!(obs[2].category, Some("idea".to_string()));
+    }
+
+    #[test]
+    fn test_parse_observations_timestamp() {
+        let obs = FileParser::parse_observations(sample_note()).unwrap();
+        // First two observations fall under ## 10:30
+        assert_eq!(obs[0].timestamp, "10:30");
+        assert_eq!(obs[1].timestamp, "10:30");
+        // Third observation is under ## 14:00
+        assert_eq!(obs[2].timestamp, "14:00");
+    }
+
+    #[test]
+    fn test_parse_observations_section() {
+        let obs = FileParser::parse_observations(sample_note()).unwrap();
+        // Section "Work" is set before the timestamps
+        assert_eq!(obs[0].section, Some("Work".to_string()));
+        assert_eq!(obs[1].section, Some("Work".to_string()));
+    }
+
+    #[test]
+    fn test_parse_observations_empty_content() {
+        // Safe: empty string should return empty vec without error
+        let obs = FileParser::parse_observations("").unwrap();
+        assert!(obs.is_empty());
+    }
+
+    #[test]
+    fn test_parse_observations_no_observations() {
+        let content = "---\ntitle: Empty\n---\n## 09:00\nJust prose, no bullet points.\n";
+        let obs = FileParser::parse_observations(content).unwrap();
+        assert!(obs.is_empty());
+    }
+
+    #[test]
+    fn test_parse_observations_full_context_not_empty() {
+        // Note: `content` field may be empty for observations without #hashtags due to parser
+        // cleaning logic. full_context always preserves the original line verbatim.
+        let obs = FileParser::parse_observations(sample_note()).unwrap();
+        for o in &obs {
+            assert!(!o.full_context.is_empty(), "full_context should always be non-empty");
+        }
+    }
+
+    #[test]
+    fn test_parse_observations_full_context_preserved() {
+        let obs = FileParser::parse_observations(sample_note()).unwrap();
+        // full_context should contain the bracket notation
+        assert!(obs[0].full_context.contains("[task]"), "full_context should contain the original line");
+    }
+
+    #[test]
+    fn test_is_timestamp_format() {
+        // Test through parse_observations: a ## HH:MM header should NOT become a section
+        let content = "## 08:00\n- [x] Something\n";
+        let obs = FileParser::parse_observations(content).unwrap();
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].timestamp, "08:00");
+        assert!(obs[0].section.is_none());
+    }
+}
