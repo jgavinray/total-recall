@@ -4,8 +4,13 @@ mod mcp;
 mod memory;
 
 use clap::{Parser, Subcommand};
-use rust_mcp_sdk::mcp_server::server_runtime::ServerRuntime;
-use rust_mcp_sdk::server_runtime::stdio::StdioTransport;
+use rust_mcp_sdk::error::SdkResult;
+use rust_mcp_sdk::McpServer;
+use rust_mcp_sdk::mcp_server::server_runtime;
+use rust_mcp_sdk::mcp_server::McpServerOptions;
+use rust_mcp_sdk::StdioTransport;
+use rust_mcp_sdk::ToMcpServerHandler;
+use rust_mcp_sdk::TransportOptions;
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -65,7 +70,7 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> SdkResult<()> {
     let cli = Cli::parse();
 
     let config_path = cli.config.clone().unwrap_or_else(|| {
@@ -75,7 +80,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .join("config.yaml")
     });
 
-    let config = config::Config::load(&config_path)?;
+    let config = match config::Config::load(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to load config: {}", e);
+            return Err(rust_mcp_sdk::error::McpSdkError::Internal {
+                description: format!("Failed to load config: {}", e)
+            });
+        }
+    };
 
     tracing_subscriber::registry()
         .with(
@@ -90,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Database path: {:?}", config.db_path);
 
     match cli.command {
-        Some(Commands::Serve { .. }) => {
+        Some(Commands::Serve { .. }) | None => {
             run_mcp_server(&config).await?;
         }
         Some(Commands::Write { content, timestamp }) => {
@@ -109,39 +122,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }) => {
             run_recent(&config, limit, days, include_archived).await?;
         }
-        None => {
-            run_mcp_server(&config).await?;
-        }
     }
 
     Ok(())
 }
 
-async fn run_mcp_server(config: &config::Config) -> Result<(), Box<dyn std::error::Error>> {
-    match memory::store::MemoryStore::new(&config.db_path) {
-        Ok(store) => {
-            tracing::info!("Starting MCP server via stdio...");
-
-            let server = mcp::server::MemoryMcpServer::new(store, config.memory_dir.clone())?;
-            let runtime = ServerRuntime::new(server, StdioTransport::new());
-
-            tracing::info!("Memory store initialized at {:?}", config.db_path);
-            runtime.run().await?;
-        }
+async fn run_mcp_server(config: &config::Config) -> SdkResult<()> {
+    let store = match memory::store::MemoryStore::new(&config.db_path) {
+        Ok(s) => s,
         Err(e) => {
-            eprintln!("Failed to initialize database at {:?}: {}", config.db_path, e);
+            let msg = format!("Failed to initialize database at {:?}: {}", config.db_path, e);
+            tracing::error!("{}", msg);
+            return Err(rust_mcp_sdk::error::McpSdkError::Internal {
+                description: msg,
+            });
         }
-    }
+    };
 
-    Ok(())
+    tracing::info!("Starting MCP server via stdio...");
+
+    let server = match mcp::server::MemoryMcpServer::new(store, config.memory_dir.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("Failed to create server: {}", e);
+            tracing::error!("{}", msg);
+            return Err(rust_mcp_sdk::error::McpSdkError::Internal {
+                description: msg,
+            });
+        }
+    };
+
+    let server_details = rust_mcp_sdk::schema::InitializeResult {
+        server_info: rust_mcp_sdk::schema::Implementation {
+            name: "total-recall".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            title: Some("Total Recall - Agentic Memory Server".into()),
+            description: Some("Memory storage with semantic search".into()),
+            icons: vec![],
+            website_url: None,
+        },
+        capabilities: rust_mcp_sdk::schema::ServerCapabilities {
+            tools: Some(rust_mcp_sdk::schema::ServerCapabilitiesTools { list_changed: None }),
+            ..Default::default()
+        },
+        protocol_version: rust_mcp_sdk::schema::ProtocolVersion::V2025_11_25.into(),
+        instructions: None,
+        meta: None,
+    };
+
+    let transport = StdioTransport::new(TransportOptions::default())?;
+    let handler = server.to_mcp_server_handler();
+    let server_runtime = server_runtime::create_server(McpServerOptions {
+        transport,
+        handler,
+        server_details,
+        task_store: None,
+        client_task_store: None,
+    });
+
+    tracing::info!("Memory store initialized at {:?}", config.db_path);
+    server_runtime.start().await
 }
 
 async fn run_write(
     config: &config::Config,
     content: &str,
     timestamp: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let store = memory::store::MemoryStore::new(&config.db_path)?;
+) -> SdkResult<()> {
+    let store = match memory::store::MemoryStore::new(&config.db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to initialize store: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     let current_date = chrono::Utc::now().format("%m-%d-%Y").to_string();
     let final_content = if let Some(ts) = timestamp {
@@ -168,8 +222,14 @@ async fn run_write(
     Ok(())
 }
 
-async fn run_read(config: &config::Config, date: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let store = memory::store::MemoryStore::new(&config.db_path)?;
+async fn run_read(config: &config::Config, date: &str) -> SdkResult<()> {
+    let store = match memory::store::MemoryStore::new(&config.db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to initialize store: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     match store.read_note(date) {
         Ok(note) => {
@@ -205,9 +265,21 @@ async fn run_search(
     query: &str,
     limit: usize,
     include_archived: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let embedder = memory::embedder::Embedder::new()?;
-    let store = memory::store::MemoryStore::new(&config.db_path)?;
+) -> SdkResult<()> {
+    let embedder = match memory::embedder::Embedder::new() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Failed to initialize embedder: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let store = match memory::store::MemoryStore::new(&config.db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to initialize store: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     let query_embedding = embedder.embed(query);
 
@@ -237,8 +309,14 @@ async fn run_recent(
     limit: usize,
     days: usize,
     include_archived: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let store = memory::store::MemoryStore::new(&config.db_path)?;
+) -> SdkResult<()> {
+    let store = match memory::store::MemoryStore::new(&config.db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to initialize store: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     match store.get_recent_notes(limit, days, include_archived) {
         Ok(notes) => {

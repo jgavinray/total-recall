@@ -4,9 +4,10 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 pub struct MemoryStore {
-    connection: Arc<Connection>,
+    connection: Arc<Mutex<Connection>>,
 }
 
 #[derive(Clone)]
@@ -30,11 +31,12 @@ impl MemoryStore {
 
         let conn = Connection::open(db_path)?;
 
-        // Load VSS extension
-        #[cfg(unix)]
-        {
-            conn.load_extension("sqlite3_vss")?;
-        }
+        // Load VSS extension - removed as it's not available
+        // Uncomment only if sqlite3_vss is actually installed:
+        // #[cfg(unix)]
+        // {
+        //     conn.load_extension("sqlite3_vss")?;
+        // }
 
         conn.execute("PRAGMA journal_mode=WAL", [])?;
 
@@ -70,7 +72,7 @@ impl MemoryStore {
         )?;
 
         Ok(Self {
-            connection: Arc::new(conn),
+            connection: Arc::new(Mutex::new(conn)),
         })
     }
 
@@ -87,7 +89,7 @@ impl MemoryStore {
             obs.note_id = date.to_string();
             let obs_id = uuid::Uuid::new_v4().to_string();
 
-            self.connection.execute(
+            self.connection.lock().unwrap().execute(
                 "INSERT INTO observations (id, note_id, timestamp, section, category, content, context, tags)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
@@ -109,7 +111,7 @@ impl MemoryStore {
     }
 
     pub fn create_note(&self, date: &str, content: &str) -> Result<Note> {
-        let exists: i64 = self.connection.query_row(
+        let exists: i64 = self.connection.lock().unwrap().query_row(
             "SELECT COUNT(*) FROM notes WHERE date = ?",
             [date],
             |row| row.get(0),
@@ -127,7 +129,7 @@ impl MemoryStore {
         let metadata = NoteMetadata::parse_frontmatter(content).unwrap_or_default();
         let title = metadata.title.clone().unwrap_or_else(|| date.to_string());
 
-        self.connection.execute(
+        self.connection.lock().unwrap().execute(
             "INSERT INTO notes (id, date, title, content, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![id, date, title, content, now, now],
@@ -139,7 +141,7 @@ impl MemoryStore {
     }
 
     pub fn read_note(&self, date: &str) -> Result<Note> {
-        let row = self.connection.query_row(
+        let row = self.connection.lock().unwrap().query_row(
             "SELECT id, date, title, content, created_at, updated_at, archived FROM notes WHERE date = ?",
             [date],
             |row| Ok((
@@ -153,13 +155,13 @@ impl MemoryStore {
             )),
         )?;
 
-        let (id, date, title, content, created_at, updated_at, archived) = row;
+        let (id, date_str, title, content, created_at, updated_at, archived) = row;
 
-        let observations = self.get_observations_for_note(date)?;
+        let observations = self.get_observations_for_note(&date_str)?;
 
         let metadata = NoteMetadata {
-            title: Some(title.clone()),
-            date: Some(date.clone()),
+            title: title.clone(),
+            date: Some(date_str.clone()),
             r#type: None,
             tags: None,
             archived: Some(archived > 0),
@@ -167,7 +169,7 @@ impl MemoryStore {
 
         Ok(Note {
             id,
-            date,
+            date: date_str,
             metadata,
             content,
             observations,
@@ -178,7 +180,8 @@ impl MemoryStore {
     }
 
     fn get_observations_for_note(&self, date: &str) -> Result<Vec<Observation>> {
-        let mut stmt = self.connection.prepare(
+        let conn = self.connection.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT id, note_id, timestamp, section, category, content, context, tags FROM observations WHERE note_id = ?",
         )?;
 
@@ -217,12 +220,16 @@ impl MemoryStore {
 
     pub fn archive_note(&self, date: &str) -> Result<()> {
         self.connection
+            .lock()
+            .unwrap()
             .execute("UPDATE notes SET archived = 1 WHERE date = ?", [date])?;
         Ok(())
     }
 
     pub fn restore_note(&self, date: &str) -> Result<()> {
         self.connection
+            .lock()
+            .unwrap()
             .execute("UPDATE notes SET archived = 0 WHERE date = ?", [date])?;
         Ok(())
     }
@@ -241,7 +248,8 @@ impl MemoryStore {
             "SELECT id, date, title, content, created_at, updated_at, archived FROM notes WHERE updated_at >= ? AND archived = 0 ORDER BY updated_at DESC LIMIT ?"
         };
 
-        let mut stmt = self.connection.prepare(query)?;
+        let conn = self.connection.lock().unwrap();
+        let mut stmt = conn.prepare(query)?;
 
         let note_rows = stmt.query_map([days_ago, limit as i64], |row| {
             Ok((
@@ -309,21 +317,25 @@ impl MemoryStore {
             "
         };
 
-        let mut stmt = self.connection.prepare(query)?;
+        let conn = self.connection.lock().unwrap();
+        let mut stmt = conn.prepare(query)?;
 
         let embedding_json = serde_json::to_string(query_embedding)
             .map_err(|e| MemoryError::Embedding(e.to_string()))?;
 
-        let note_rows = stmt.query_map([embedding_json, limit as i64, limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-            ))
-        })?;
+        let note_rows = stmt.query_map(
+            [embedding_json, (limit as i64).to_string(), (limit as i64).to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )?;
 
         let mut notes = Vec::new();
         for row in note_rows {
