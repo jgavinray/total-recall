@@ -1,13 +1,30 @@
 use crate::error::{MemoryError, Result};
+use crate::memory::embedder::Embedder;
 use crate::memory::models::{Note, NoteMetadata, Observation};
 use chrono::Utc;
+use std::sync::Once;
 use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+/// Register sqlite-vec extension for all new SQLite connections (once per process).
+static SQLITE_VEC_LOADED: Once = Once::new();
+
+fn ensure_sqlite_vec_loaded() {
+    SQLITE_VEC_LOADED.call_once(|| {
+        unsafe {
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
+        tracing::info!("sqlite-vec extension registered via auto_extension");
+    });
+}
+
 pub struct MemoryStore {
     connection: Arc<Mutex<Connection>>,
+    embedder: Embedder,
 }
 
 #[derive(Clone)]
@@ -29,16 +46,38 @@ impl MemoryStore {
             std::fs::create_dir_all(parent)?;
         }
 
+        // Register sqlite-vec before opening any connection
+        ensure_sqlite_vec_loaded();
+
         let conn = Connection::open(db_path)?;
 
-        // Load VSS extension - removed as it's not available
-        // Uncomment only if sqlite3_vss is actually installed:
-        // #[cfg(unix)]
-        // {
-        //     conn.load_extension("sqlite3_vss")?;
-        // }
+        // Verify sqlite-vec loaded correctly
+        let vec_version: String = conn
+            .query_row("SELECT vec_version()", [], |r| r.get(0))
+            .map_err(|e| MemoryError::ParseError(format!("sqlite-vec not loaded: {}", e)))?;
+        tracing::info!("sqlite-vec version: {}", vec_version);
 
         conn.execute("PRAGMA journal_mode=WAL", [])?;
+
+        // Migrate: drop old vss-based virtual table if present (incompatible schema)
+        let is_vss: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='observations' AND sql LIKE '%vss%'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if is_vss {
+            tracing::warn!(
+                "Dropping old sqlite-vss 'observations' table and migrating to sqlite-vec"
+            );
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS observations;
+                 DROP TABLE IF EXISTS vec_observations;",
+            )?;
+        }
 
         conn.execute_batch(
             "
@@ -52,16 +91,22 @@ impl MemoryStore {
                 archived INTEGER DEFAULT 0
             );
 
-            CREATE VIRTUAL TABLE IF NOT EXISTS observations USING vss(
-                id TEXT PRIMARY KEY,
+            -- Regular observations table (metadata only)
+            CREATE TABLE IF NOT EXISTS observations (
+                id TEXT NOT NULL UNIQUE,
                 note_id TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 section TEXT,
                 category TEXT,
                 content TEXT NOT NULL,
                 context TEXT NOT NULL,
-                tags TEXT,
-                embedding FLOAT[384]
+                tags TEXT
+            );
+
+            -- Vector index table using sqlite-vec (vec0 virtual table)
+            -- rowid matches observations.rowid for joining
+            CREATE VIRTUAL TABLE IF NOT EXISTS vec_observations USING vec0(
+                embedding float[384]
             );
 
             CREATE INDEX IF NOT EXISTS idx_observations_note_id ON observations(note_id);
@@ -71,8 +116,11 @@ impl MemoryStore {
             ",
         )?;
 
+        tracing::info!("MemoryStore initialized with sqlite-vec vector search");
+
         Ok(Self {
             connection: Arc::new(Mutex::new(conn)),
+            embedder: Embedder::new()?,
         })
     }
 
@@ -89,7 +137,10 @@ impl MemoryStore {
             obs.note_id = date.to_string();
             let obs_id = uuid::Uuid::new_v4().to_string();
 
-            self.connection.lock().unwrap().execute(
+            let conn = self.connection.lock().unwrap();
+
+            // Insert observation metadata
+            conn.execute(
                 "INSERT INTO observations (id, note_id, timestamp, section, category, content, context, tags)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
@@ -102,6 +153,24 @@ impl MemoryStore {
                     obs.full_context,
                     serde_json::to_string(&obs.tags).unwrap_or("[]".to_string())
                 ],
+            )?;
+
+            let obs_rowid = conn.last_insert_rowid();
+
+            // Compute and store embedding in vec_observations
+            let embedding = self.embedder.embed(&obs.content);
+            let embedding_json = format!(
+                "[{}]",
+                embedding
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+
+            conn.execute(
+                "INSERT INTO vec_observations(rowid, embedding) VALUES (?1, vec_f32(?2))",
+                params![obs_rowid, embedding_json],
             )?;
 
             inserted.push(obs);
@@ -293,49 +362,53 @@ impl MemoryStore {
         limit: usize,
         include_archived: bool,
     ) -> Result<Vec<Note>> {
+        let embedding_json = format!(
+            "[{}]",
+            query_embedding
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        // sqlite-vec KNN search: find closest observations, join back to notes
         let query = if include_archived {
             "
-            SELECT n.id, n.date, n.title, n.content, n.updated_at, n.archived, 
-                   AVG(o.distance) as avg_distance
-            FROM notes n
-            JOIN observations o ON n.date = o.note_id
-            WHERE o.embedding MATCH ?1 AND k = ?2
-            GROUP BY n.date
-            ORDER BY avg_distance
-            LIMIT ?3
+            SELECT DISTINCT n.id, n.date, n.title, n.content, n.updated_at, n.archived,
+                   MIN(v.distance) as min_distance
+            FROM vec_observations v
+            JOIN observations o ON o.rowid = v.rowid
+            JOIN notes n ON n.date = o.note_id
+            WHERE v.embedding MATCH vec_f32(?1)
+            ORDER BY v.distance
+            LIMIT ?2
             "
         } else {
             "
-            SELECT n.id, n.date, n.title, n.content, n.updated_at, n.archived,
-                   AVG(o.distance) as avg_distance
-            FROM notes n
-            JOIN observations o ON n.date = o.note_id
-            WHERE o.embedding MATCH ?1 AND k = ?2 AND n.archived = 0
-            GROUP BY n.date
-            ORDER BY avg_distance
-            LIMIT ?3
+            SELECT DISTINCT n.id, n.date, n.title, n.content, n.updated_at, n.archived,
+                   MIN(v.distance) as min_distance
+            FROM vec_observations v
+            JOIN observations o ON o.rowid = v.rowid
+            JOIN notes n ON n.date = o.note_id
+            WHERE v.embedding MATCH vec_f32(?1) AND n.archived = 0
+            ORDER BY v.distance
+            LIMIT ?2
             "
         };
 
         let conn = self.connection.lock().unwrap();
         let mut stmt = conn.prepare(query)?;
 
-        let embedding_json = serde_json::to_string(query_embedding)
-            .map_err(|e| MemoryError::Embedding(e.to_string()))?;
-
-        let note_rows = stmt.query_map(
-            [embedding_json, (limit as i64).to_string(), (limit as i64).to_string()],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                ))
-            },
-        )?;
+        let note_rows = stmt.query_map(params![embedding_json, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })?;
 
         let mut notes = Vec::new();
         for row in note_rows {
