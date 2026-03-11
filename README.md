@@ -6,6 +6,87 @@ Total-Recall gives AI agents (Claude Desktop, opencode, or any MCP-compatible cl
 
 ---
 
+## 🚀 Quick Start (5 minutes)
+
+Get up and running from zero to a working MCP connection in 5 minutes.
+
+### 1. Prerequisites
+
+- **Rust ≥ 1.70** — [install via rustup](https://rustup.rs/)
+- **macOS or Linux** (Windows untested)
+- **Git**
+
+Verify Rust:
+```bash
+rustc --version  # Should show 1.70 or higher
+```
+
+### 2. Clone & Build
+
+```bash
+git clone https://github.com/jgavinray/total-recall.git
+cd total-recall
+cargo build --release
+```
+
+Install the binary:
+```bash
+cargo install --path .
+```
+
+### 3. Setup Configuration
+
+```bash
+mkdir -p ~/.total-recall
+cp config.yaml.example ~/.total-recall/config.yaml
+```
+
+The default config works out of the box. Edit `~/.total-recall/config.yaml` if you need custom paths.
+
+### 4. Connect to Claude Desktop
+
+1. Open (or create) your Claude Desktop config:
+   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+2. Add total-recall to `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "total-recall": {
+      "command": "total-recall",
+      "args": ["serve"],
+      "env": {}
+    }
+  }
+}
+```
+
+If `total-recall` isn't on your PATH, use the full binary path:
+```bash
+which total-recall  # Get the path, then use it in "command"
+```
+
+3. **Restart Claude Desktop** to apply the changes.
+
+### 5. Verify It Works
+
+In Claude Desktop, try this tool call:
+
+```
+total-recall write "Test note from Quick Start guide."
+```
+
+You should see a success response. Check your notes:
+```bash
+total-recall recent  # Should show today's test note
+```
+
+That's it! You're connected. See the [Configuration](#configuration) and [CLI Usage](#cli-usage) sections for more details.
+
+---
+
 ## What It Does
 
 - **Stores notes** as dated Markdown files (`mm-dd-yyyy.md`) under `~/.total-recall/`
