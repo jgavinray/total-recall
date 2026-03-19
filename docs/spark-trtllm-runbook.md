@@ -281,5 +281,77 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv
 
 ---
 
-**Last Updated:** 2026-03-19 11:38 PDT
-**Status:** Research Phase - Environment Audit Pending SSH Access
+**Last Updated:** 2026-03-19 11:50 PDT
+**Status:** Research Complete - Environment Audit Pending SSH Access
+
+## Research Summary (Complete)
+
+### Research Completed (No SSH Required)
+
+✅ **TRT-LLM Container Research:**
+- Identified container registry: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/tensorrt-llm/containers/release/tags
+- Documented base image versions from Release 0.17 through 1.2.0
+- Confirmed sm_121 support added in Release 1.0
+- Confirmed DGX Spark beta support added in Release 1.2.0
+
+✅ **trtllm-serve Command:**
+- Command is available and supports OpenAI-compatible endpoints
+- Supports PyTorch backend (default in Release 1.0+)
+- Documented full command syntax and options
+- Identified supported endpoints: /v1/models, /v1/completions, /v1/chat/completions
+
+✅ **Nemotron-3-Super-120B Model:**
+- Model available on HuggingFace: https://huggingface.co/nvidia/Nemotron-3-Super-120B-A12B-NVFP4
+- NVFP4 quantized version: 80.4 GB
+- Model specs: 120B total / 12B active parameters
+- Minimum GPU requirement: 1× B200 OR 1× DGX Spark
+- Release date: March 11, 2026
+- License: NVIDIA Nemotron Open Model License
+
+✅ **Disk Requirements Estimation:**
+- Model weights (NVFP4): 80.4 GB
+- Tokenizer: ~1 GB
+- Engine build workspace: 200-400 GB (estimated)
+- Container image: 15-25 GB
+- **Total recommended:** 500 GB free space
+
+### Environment Audit (Pending SSH)
+
+❌ **Cannot Complete Without SSH Access:**
+- OS/arch verification
+- CUDA version check
+- Driver version check
+- Docker version check
+- Available disk space verification
+- Current GPU memory usage
+
+**SSH Details:**
+- Host: 192.168.0.33
+- User: gavinray
+- Authentication: Password required (SSH key rejected)
+
+---
+
+## Key Findings Summary
+
+### What We Know
+
+1. **TRT-LLM supports sm_121 (Blackwell)** starting from Release 1.0
+2. **DGX Spark beta support** is available in Release 1.2.0+
+3. **Nemotron-3-Super-120B NVFP4** is available and optimized for Blackwell
+4. **trtllm-serve** provides OpenAI-compatible serving
+5. **Critical FP4 CUTLASS bug** exists on GB10 due to shared memory limitations
+
+### What We Need to Verify
+
+1. **Exact disk space available** on Spark
+2. **Current CUDA/driver versions** on Spark
+3. **Whether cuBLASLt FP4 backend workaround** is viable for TRT-LLM
+4. **Engine build feasibility** for 120B MoE on single GB10
+
+### Recommended Next Steps
+
+1. **Provide SSH password** for Spark to complete environment audit
+2. **Check available disk space** - may need expansion before engine build
+3. **Test with smaller model first** (e.g., GPT-OSS-20B which is validated)
+4. **Investigate TRT-LLM backend selection** to use cuBLASLt instead of CUTLASS for FP4
