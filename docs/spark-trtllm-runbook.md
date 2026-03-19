@@ -355,3 +355,172 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv
 2. **Check available disk space** - may need expansion before engine build
 3. **Test with smaller model first** (e.g., GPT-OSS-20B which is validated)
 4. **Investigate TRT-LLM backend selection** to use cuBLASLt instead of CUTLASS for FP4
+
+---
+
+## SPARK-7: hyper01 Staging
+
+**Task:** Stage Nemotron-3-Super-120B NVFP4 weights on hyper01 (192.168.0.44) at `/archive/zoidberg/models/nemotron-3-super-120b-nvfp4/`
+
+**Date:** 2026-03-19 13:36 PDT
+
+**Executor:** Bender (Zoidberg crew developer)
+
+### Critical Blocker: SSH Access Failed
+
+**Status:** ❌ BLOCKED - Cannot proceed without SSH access to hyper01
+
+**Target Host:**
+- IP: 192.168.0.44
+- User: gavinray
+- Hostname: hyper01 (x86 EPYC machine)
+
+**SSH Connection Test:**
+```
+$ nc -zv 192.168.0.44 22
+Connection to 192.168.0.44 port 22 [tcp/ssh] succeeded!
+```
+✅ Network connectivity confirmed - SSH port 22 is reachable
+
+**SSH Key Authentication:**
+```
+$ ssh gavinray@192.168.0.44 "df -h /archive/zoidberg/"
+gavinray@192.168.0.44: Permission denied (publickey).
+```
+
+**Debug Output (abbreviated):**
+```
+debug1: Will attempt key: /Users/jgavinray/.ssh/id_ed25519 ED25519 SHA256:fhcGuqOD9cIFjPm9XTe7EioWR3HVGAQu1b4au107Nx8 agent
+debug3: send packet: type 50
+debug2: we sent a publickey packet, wait for reply
+debug3: receive packet: type 51
+debug1: Authentications that can continue: publickey
+...
+debug1: No more authentication methods to try.
+gavinray@192.168.0.44: Permission denied (publickey).
+```
+
+**Root Cause:**
+- Server hyper01 is configured for **publickey authentication only**
+- Local SSH key (`~/.ssh/id_ed25519`, fingerprint `SHA256:fhcGuqOD9cIFjPm9XTe7EioWR3HVGAQu1b4au107Nx8`) is **NOT** in hyper01's `~gavinray/.ssh/authorized_keys`
+- Password authentication is **disabled** on hyper01
+
+**Local SSH Key Public Key:**
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJCHB854iTnRb++D6zjgYMlzbQLUngRTEVAmoXTuQ6Qq jgavinray@zoidberg.local
+```
+
+**Attempts Made:**
+1. ✅ SSH agent key loaded: `ssh-add ~/.ssh/id_ed25519`
+2. ❌ Direct SSH: `ssh gavinray@192.168.0.44` → Permission denied (publickey)
+3. ❌ SSH with explicit key: `ssh -i ~/.ssh/id_ed25519 gavinray@192.168.0.44` → Permission denied (publickey)
+4. ❌ ssh-copy-id: `ssh-copy-id -i ~/.ssh/id_ed25519.pub gavinray@192.168.0.44` → Permission denied (publickey)
+5. ❌ Password auth attempt: `ssh -o PreferredAuthentications=password ...` → Permission denied (publickey)
+
+**Why ssh-copy-id Failed:**
+- `ssh-copy-id` requires an initial successful login to copy the key
+- Since publickey auth fails and password auth is disabled, there's no way to copy the key remotely
+
+### Required Action to Unblock
+
+**Option 1: Manual Key Installation (Recommended)**
+1. Physically or remotely access hyper01 through an alternative method (console, out-of-band management, etc.)
+2. As user `gavinray`, append the following to `~/.ssh/authorized_keys`:
+   ```
+   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJCHB854iTnRb++D6zjgYMlzbQLUngRTEVAmoXTuQ6Qq jgavinray@zoidberg.local
+   ```
+3. Ensure permissions are correct:
+   ```bash
+   chmod 700 ~/.ssh
+   chmod 600 ~/.ssh/authorized_keys
+   ```
+
+**Option 2: Enable Password Authentication (Temporary)**
+1. On hyper01, edit `/etc/ssh/sshd_config`:
+   ```
+   PasswordAuthentication yes
+   ```
+2. Restart SSH: `sudo systemctl restart sshd`
+3. Use ssh-copy-id or manually add key
+4. (Optional) Re-disable password auth after key is installed
+
+**Option 3: Use Alternative Key**
+- If another SSH key exists that IS authorized on hyper01, use that key instead
+- Specify with: `ssh -i /path/to/alternative/key gavinray@192.168.0.44`
+
+### Planned Tasks (Pending SSH Access)
+
+Once SSH access is restored, the following tasks will be executed:
+
+1. **Check Disk Space:**
+   ```bash
+   df -h /archive/zoidberg/
+   ```
+   Requirement: 500 GB+ free space
+
+2. **Create Directory Structure:**
+   ```bash
+   mkdir -p /archive/zoidberg/models/nemotron-3-super-120b-nvfp4/
+   ```
+
+3. **Check Available Download Tools:**
+   ```bash
+   which huggingface-cli
+   which git
+   ```
+
+4. **Download Nemotron-3-Super-120B NVFP4 Weights:**
+   - Model: `nvidia/Nemotron-3-Super-120B-A12B-NVFP4`
+   - Expected size: ~80.4 GB
+   ```bash
+   huggingface-cli download nvidia/Nemotron-3-Super-120B-A12B-NVFP4 --local-dir /archive/zoidberg/models/nemotron-3-super-120b-nvfp4/
+   ```
+
+5. **Verify Download Integrity:**
+   - Check file sizes against expected values
+   - Verify checksums if available from HuggingFace
+
+6. **Document Disk Usage:**
+   ```bash
+   du -sh /archive/zoidberg/models/nemotron-3-super-120b-nvfp4/
+   df -h /archive/zoidberg/
+   ```
+
+7. **Create Transfer Plan:**
+   - Document rsync command for transfer to Spark (192.168.0.33)
+   - Alternatively, document NFS mount procedure
+
+### Transfer Plan (Pending Weights Download)
+
+**Method 1: Direct rsync (when Spark is ready)**
+```bash
+rsync -avz --progress /archive/zoidberg/models/nemotron-3-super-120b-nvfp4/ gavinray@192.168.0.33:/archive/spark/models/nemotron-3-super-120b-nvfp4/
+```
+
+**Method 2: NFS Mount**
+1. Export `/archive/zoidberg/models/` from hyper01 via NFS
+2. Mount on Spark: `mount -t nfs hyper01:/archive/zoidberg/models /mnt/hyper01-models`
+3. Copy or symlink to Spark's model directory
+
+**Estimated Transfer Time:**
+- Network: Assuming 1 Gbps link (~125 MB/s theoretical, ~100 MB/s realistic)
+- Data: ~80 GB
+- Time: ~800 seconds (~13 minutes) + overhead
+
+### Status Summary
+
+| Task | Status | Notes |
+|------|--------|-------|
+| SSH Access to hyper01 | ❌ BLOCKED | Public key not authorized |
+| Disk Space Check | ⏳ PENDING | Requires SSH access |
+| Directory Creation | ⏳ PENDING | Requires SSH access |
+| Weight Download | ⏳ PENDING | Requires SSH access |
+| Integrity Verification | ⏳ PENDING | Requires SSH access |
+| Transfer Plan | 📝 DRAFT | Documented above, pending execution |
+
+**Next Action Required:** User must enable SSH key access to hyper01 (192.168.0.44) for user `gavinray`
+
+---
+
+**Last Updated:** 2026-03-19 13:36 PDT
+**Task Status:** BLOCKED - SSH Access Required
