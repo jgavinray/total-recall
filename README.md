@@ -420,6 +420,77 @@ total-recall serve  # rebuilds index on next write
 
 ---
 
+## 🐳 Docker / Container
+
+Run total-recall in a hardened Chainguard (Wolfi) container — no Rust toolchain required on the host.
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) ≥ 24 (or Docker Desktop)
+- `docker compose` v2 plugin
+
+### Build the image
+
+```bash
+docker build -t total-recall:latest .
+```
+
+The multi-stage `Dockerfile` uses:
+1. `cgr.dev/chainguard/rust:latest-dev` — builder with full Rust toolchain
+2. `cgr.dev/chainguard/static:latest` — minimal runtime (~3 MB, no shell, runs as UID 65532 nonroot)
+
+The binary is linked statically so it runs on the bare `static` image with no libc dependency.
+
+### Quick run
+
+```bash
+# Serve over stdio (MCP mode) — bind your note directory
+docker run --rm \
+  -v "${HOME}/.total-recall:/data/memory" \
+  total-recall:latest serve
+
+# CLI sub-commands work the same way
+docker run --rm \
+  -v "${HOME}/.total-recall:/data/memory" \
+  total-recall:latest write "Note from inside Docker."
+
+docker run --rm \
+  -v "${HOME}/.total-recall:/data/memory" \
+  total-recall:latest recent
+```
+
+### Docker Compose
+
+```bash
+# 1. Create your .env
+cp .env.example .env
+# Edit .env — set TR_MEMORY_DIR and TR_MODEL_CACHE_DIR if needed
+
+# 2. Build and start
+docker compose up --build
+
+# 3. Verify it started
+docker compose logs -f total-recall
+```
+
+The compose file mounts two host paths:
+- `TR_MEMORY_DIR` (default: `~/.total-recall`) — daily notes + SQLite index
+- `TR_MODEL_CACHE_DIR` (default: `~/.total-recall/models`) — cached ONNX model
+
+total-recall communicates over **stdio** (MCP protocol), so the service container stays running and you exec into it or wire it to an MCP client via `docker exec`.
+
+### Environment variables
+
+See [`.env.example`](.env.example) for the full reference.
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUST_LOG` | `total_recall=info` | Log verbosity (tracing-subscriber filter) |
+| `TR_MEMORY_DIR` | `~/.total-recall` | Host path for notes + DB (compose volume) |
+| `TR_MODEL_CACHE_DIR` | `~/.total-recall/models` | Host path for ONNX model cache (compose volume) |
+
+---
+
 ## License
 
 GPL-2.0 — see [LICENSE](LICENSE).

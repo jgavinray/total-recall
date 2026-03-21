@@ -1,0 +1,35 @@
+# Build artefacts
+target/
+
+# Environment files — never bake secrets into the image
+.env
+.env.*
+!.env.example
+
+# Git history
+.git
+.gitignore
+
+# Editor / OS noise
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Docs and task files (keep image lean)
+docs/
+*.md
+!README.md
+
+# Test output
+/tests/fixtures/
+
+# CI
+.github/

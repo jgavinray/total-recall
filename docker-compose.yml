@@ -1,0 +1,54 @@
+version: '3.8'
+
+# Total-Recall — Agentic Memory MCP Server
+# =========================================
+# Exposes the total-recall binary as a long-running service.
+# The binary speaks the MCP protocol over stdio; wrap it with an
+# MCP-capable proxy (e.g. opencode, Claude Desktop) or use the CLI sub-commands
+# by exec'ing into the container.
+#
+# Usage:
+#   cp .env.example .env && edit .env
+#   docker compose up --build
+
+services:
+  total-recall:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: total-recall:latest
+
+    # All runtime knobs come from the .env file.
+    env_file:
+      - .env
+
+    volumes:
+      # Memory directory — daily Markdown notes and SQLite index
+      - memory_data:/data/memory
+      # Model cache — avoids re-downloading the ONNX model on restart
+      - model_cache:/data/models
+
+    restart: unless-stopped
+
+    # total-recall is a stdio MCP server; it doesn't bind a TCP port by default.
+    # Remove the comment below if you add an HTTP/SSE transport in future.
+    # ports:
+    #   - "${TR_PORT:-8080}:8080"
+
+# ──────────────────────────────────────────────
+# Volumes
+# ──────────────────────────────────────────────
+volumes:
+  memory_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${TR_MEMORY_DIR:-${HOME}/.total-recall}
+
+  model_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${TR_MODEL_CACHE_DIR:-${HOME}/.total-recall/models}
