@@ -96,9 +96,9 @@ impl ServerHandler for MemoryMcpServer {
 
                 let current_date = chrono::Utc::now().format("%m-%d-%Y").to_string();
                 let store = self.store.read().await;
-                match store.create_note(&current_date, &args.content) {
+                match store.append_note(&current_date, &args.content) {
                     Ok(_) => Ok(CallToolResult::text_content(vec![
-                        format!("Created note for {}", current_date).into(),
+                        format!("Stored memory for {}", current_date).into(),
                     ])),
                     Err(e) => {
                         let error_msg = format!("Error: {}", e);

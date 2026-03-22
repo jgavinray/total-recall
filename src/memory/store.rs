@@ -210,6 +210,101 @@ impl MemoryStore {
         self.read_note(date)
     }
 
+    /// Insert a raw text chunk as a synthetic observation so it's vector-searchable.
+    /// Used when the content doesn't contain structured `- [category]` observations.
+    fn insert_raw_observation(&self, date: &str, content: &str) -> Result<()> {
+        // Strip leading/trailing whitespace and skip empty
+        let text = content.trim();
+        if text.is_empty() {
+            return Ok(());
+        }
+
+        let obs_id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().timestamp().to_string();
+
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "INSERT INTO observations (id, note_id, timestamp, section, category, content, context, tags)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                obs_id,
+                date,
+                now,
+                Option::<String>::None,
+                "memory",
+                text,
+                text,
+                "[]"
+            ],
+        )?;
+
+        let obs_rowid = conn.last_insert_rowid();
+        drop(conn); // Release lock before embedding (which doesn't need it)
+
+        // Compute and store embedding
+        let embedding = self.embedder.embed(text);
+        let embedding_json = format!(
+            "[{}]",
+            embedding
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        self.connection.lock().unwrap().execute(
+            "INSERT INTO vec_observations(rowid, embedding) VALUES (?1, vec_f32(?2))",
+            params![obs_rowid, embedding_json],
+        )?;
+
+        Ok(())
+    }
+
+    /// Append content to an existing note, or create a new one if it doesn't exist.
+    /// This is the idempotent write path used by tr_store — safe to call multiple times per day.
+    /// Plain text content is also indexed as a vector-searchable observation.
+    pub fn append_note(&self, date: &str, content: &str) -> Result<Note> {
+        let exists: i64 = self.connection.lock().unwrap().query_row(
+            "SELECT COUNT(*) FROM notes WHERE date = ?",
+            [date],
+            |row| row.get(0),
+        )?;
+
+        if exists == 0 {
+            // No note yet — create it (will call parse_and_insert_observations)
+            let note = self.create_note(date, content)?;
+            // If no structured observations were parsed, index the raw content
+            let obs_count: i64 = self.connection.lock().unwrap().query_row(
+                "SELECT COUNT(*) FROM observations WHERE note_id = ?",
+                [date],
+                |row| row.get(0),
+            )?;
+            if obs_count == 0 {
+                self.insert_raw_observation(date, content)?;
+            }
+            return Ok(note);
+        }
+
+        // Note exists — append content
+        let existing = self.read_note(date)?;
+        let now = Utc::now().timestamp();
+        let separator = if existing.content.ends_with('\n') { "" } else { "\n" };
+        let new_content = format!("{}{}\n{}", existing.content, separator, content);
+
+        self.connection.lock().unwrap().execute(
+            "UPDATE notes SET content = ?1, updated_at = ?2 WHERE date = ?3",
+            params![new_content, now, date],
+        )?;
+
+        // Try structured observations first, fall back to raw indexing
+        let parsed_obs = self.parse_and_insert_observations(date, content)?;
+        if parsed_obs.is_empty() {
+            self.insert_raw_observation(date, content)?;
+        }
+
+        self.read_note(date)
+    }
+
     pub fn read_note(&self, date: &str) -> Result<Note> {
         let row = self.connection.lock().unwrap().query_row(
             "SELECT id, date, title, content, created_at, updated_at, archived FROM notes WHERE date = ?",

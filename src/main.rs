@@ -32,13 +32,17 @@ enum Commands {
         #[arg(long, default_value = "1000")]
         timeout: u64,
     },
-    /// Write a new note
+    /// Write a new note (or append to today's note if it already exists)
     Write {
         #[arg(required = true)]
         content: String,
 
         #[arg(long)]
         timestamp: Option<String>,
+
+        /// Append to today's note if it already exists (default: false = create only)
+        #[arg(long, default_value_t = false)]
+        append: bool,
     },
     /// Read a note by date
     Read {
@@ -106,8 +110,8 @@ async fn main() -> SdkResult<()> {
         Some(Commands::Serve { .. }) | None => {
             run_mcp_server(&config).await?;
         }
-        Some(Commands::Write { content, timestamp }) => {
-            run_write(&config, &content, timestamp.as_deref()).await?;
+        Some(Commands::Write { content, timestamp, append }) => {
+            run_write(&config, &content, timestamp.as_deref(), append).await?;
         }
         Some(Commands::Read { date }) => {
             run_read(&config, &date).await?;
@@ -188,6 +192,7 @@ async fn run_write(
     config: &config::Config,
     content: &str,
     timestamp: Option<&str>,
+    append: bool,
 ) -> SdkResult<()> {
     let store = match memory::store::MemoryStore::new(&config.db_path) {
         Ok(s) => s,
@@ -204,18 +209,38 @@ async fn run_write(
         format!("\n{}", content)
     };
 
-    match store.create_note(&current_date, &final_content) {
-        Ok(note) => {
-            println!("Created note for {}", note.date);
-            println!("Title: {}", note.metadata.title.as_deref().unwrap_or("Untitled"));
+    if append {
+        match store.append_note(&current_date, &final_content) {
+            Ok(note) => {
+                println!("Appended to note for {}", note.date);
+            }
+            Err(e) => {
+                eprintln!("Error appending to note: {}", e);
+                std::process::exit(1);
+            }
         }
-        Err(error::MemoryError::FileExistsError(_)) => {
-            eprintln!("Note for {} already exists (immutability enforced)", current_date);
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Error creating note: {}", e);
-            std::process::exit(1);
+    } else {
+        match store.create_note(&current_date, &final_content) {
+            Ok(note) => {
+                println!("Created note for {}", note.date);
+                println!("Title: {}", note.metadata.title.as_deref().unwrap_or("Untitled"));
+            }
+            Err(error::MemoryError::FileExistsError(_)) => {
+                // Auto-append if note already exists — don't fail
+                match store.append_note(&current_date, &final_content) {
+                    Ok(note) => {
+                        println!("Appended to existing note for {}", note.date);
+                    }
+                    Err(e) => {
+                        eprintln!("Error appending to note: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error creating note: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 
