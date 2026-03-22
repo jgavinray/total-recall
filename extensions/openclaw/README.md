@@ -33,7 +33,7 @@ Add this to your OpenClaw configuration:
 ```json
 {
   "total_recall": {
-    "url": "http://localhost:3000",
+    "url": "http://localhost:8811",
     "transport": "http"
   }
 }

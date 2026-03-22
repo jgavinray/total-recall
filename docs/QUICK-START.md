@@ -9,7 +9,7 @@
 ## Clone + Build
 
 ```bash
-git clone https://github.com/gavinray97/total-recall.git
+git clone https://github.com/jgavinray/total-recall.git
 cd total-recall
 cargo build --release
 ```
@@ -17,10 +17,10 @@ cargo build --release
 ## Configure
 
 ```bash
-mkdir -p ~/.openclaw/mcp && cp config.yaml.example ~/.openclaw/mcp/total-recall.yaml
+mkdir -p ~/.total-recall && cp config.yaml.example ~/.total-recall/config.yaml
 ```
 
-Edit `~/.openclaw/mcp/total-recall.yaml`:
+Edit `~/.total-recall/config.yaml`:
 ```yaml
 memory_dir: ~/.total-recall
 db_path: ~/.total-recall/memory.db
@@ -39,8 +39,8 @@ Add to `~/Library/Application Support/Claude/mcp_servers/total-recall.json`:
   "mcpServers": {
     "total-recall": {
       "command": "/path/to/total-recall",
-      "args": ["mcp"],
-      "cwd": "~/.openclaw/mcp"
+      "args": ["serve"],
+      "cwd": "~/.total-recall"
     }
   }
 }
@@ -52,7 +52,7 @@ Restart Claude Desktop.
 
 In Claude, try:
 ```
-memory_search("test query")
+search_notes("test query")
 ```
 
 Returns empty initially. Create a note, search again.

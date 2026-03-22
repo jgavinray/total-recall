@@ -57,7 +57,7 @@ The first build will download the ONNX embedding model (`all-MiniLM-L6-v2`) to y
 
 ```bash
 # Run the MCP server
-cargo run -- --help
+cargo run serve --help
 ```
 
 ---
