@@ -25,6 +25,7 @@ fn ensure_sqlite_vec_loaded() {
 pub struct MemoryStore {
     connection: Arc<Mutex<Connection>>,
     embedder: Embedder,
+    write_count: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -59,6 +60,9 @@ impl MemoryStore {
 
         // PRAGMA journal_mode=WAL returns a row with the mode name; use execute_batch to ignore it.
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+
+        // Initialize write counter for periodic WAL checkpointing
+        let write_count = std::sync::atomic::AtomicUsize::new(0);
 
         // Migrate: drop old vss-based virtual table if present (incompatible schema)
         let is_vss: bool = conn
@@ -122,6 +126,7 @@ impl MemoryStore {
         Ok(Self {
             connection: Arc::new(Mutex::new(conn)),
             embedder: Embedder::new()?,
+            write_count: write_count,
         })
     }
 
@@ -264,6 +269,12 @@ impl MemoryStore {
     /// This is the idempotent write path used by tr_store — safe to call multiple times per day.
     /// Plain text content is also indexed as a vector-searchable observation.
     pub fn append_note(&self, date: &str, content: &str) -> Result<Note> {
+        // Increment write counter and checkpoint every 100 writes
+        self.write_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.write_count.load(std::sync::atomic::Ordering::Relaxed) % 100 == 0 {
+            let _ = self.connection.lock().unwrap().execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+        }
+
         let exists: i64 = self.connection.lock().unwrap().query_row(
             "SELECT COUNT(*) FROM notes WHERE date = ?",
             [date],
