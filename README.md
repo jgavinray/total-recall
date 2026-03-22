@@ -422,7 +422,7 @@ total-recall serve  # rebuilds index on next write
 
 ## 🐳 Docker / Container
 
-Run total-recall in a hardened Chainguard (Wolfi) container — no Rust toolchain required on the host.
+Run total-recall as a portable HTTP MCP server — no Rust toolchain required on the host. Works on any machine with Docker; no hardcoded paths.
 
 ### Prerequisites
 
@@ -436,58 +436,69 @@ docker build -t total-recall:latest .
 ```
 
 The multi-stage `Dockerfile` uses:
-1. `cgr.dev/chainguard/rust:latest-dev` — builder with full Rust toolchain
-2. `cgr.dev/chainguard/static:latest` — minimal runtime (~3 MB, no shell, runs as UID 65532 nonroot)
-
-The binary is linked statically so it runs on the bare `static` image with no libc dependency.
+1. `ubuntu:24.04` — builder with Rust toolchain (glibc 2.39, ONNX compatible)
+2. `ubuntu:24.04` — runtime image with glibc (required for ONNX embedding model)
 
 ### Quick run
 
 ```bash
-# Serve over stdio (MCP mode) — bind your note directory
+# HTTP transport — MCP endpoint at http://localhost:8811/mcp
 docker run --rm \
-  -v "${HOME}/.total-recall:/data/memory" \
-  total-recall:latest serve
+  -v "${HOME}/.total-recall/memory:/data/memory" \
+  -v "${HOME}/.total-recall/models:/data/models" \
+  -p 8811:8811 \
+  total-recall:latest serve --transport http --port 8811 --host 0.0.0.0
 
 # CLI sub-commands work the same way
 docker run --rm \
-  -v "${HOME}/.total-recall:/data/memory" \
+  -v "${HOME}/.total-recall/memory:/data/memory" \
   total-recall:latest write "Note from inside Docker."
 
 docker run --rm \
-  -v "${HOME}/.total-recall:/data/memory" \
+  -v "${HOME}/.total-recall/memory:/data/memory" \
   total-recall:latest recent
 ```
 
 ### Docker Compose
 
 ```bash
-# 1. Create your .env
+# 1. (Optional) Copy and edit .env to override defaults
 cp .env.example .env
-# Edit .env — set TR_MEMORY_DIR and TR_MODEL_CACHE_DIR if needed
 
 # 2. Build and start
-docker compose up --build
+docker compose up --build -d
 
 # 3. Verify it started
 docker compose logs -f total-recall
+
+# 4. Validate MCP endpoint
+curl -X POST http://localhost:8811/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'MCP-Protocol-Version: 2025-06-18' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}'
 ```
 
-The compose file mounts two host paths:
-- `TR_MEMORY_DIR` (default: `~/.total-recall`) — daily notes + SQLite index
+The compose file mounts two host paths (all configurable via `.env`):
+- `TR_MEMORY_DIR` (default: `~/.total-recall/memory`) — daily notes + SQLite index
 - `TR_MODEL_CACHE_DIR` (default: `~/.total-recall/models`) — cached ONNX model
+- `TR_PORT` (default: `8811`) — HTTP port
 
-total-recall communicates over **stdio** (MCP protocol), so the service container stays running and you exec into it or wire it to an MCP client via `docker exec`.
+total-recall exposes an **HTTP MCP server** (`/mcp` endpoint, Streamable HTTP transport). Wire it to any MCP client using `http://localhost:8811/mcp`.
 
 ### Environment variables
 
-See [`.env.example`](.env.example) for the full reference.
+Copy `.env.example` to `.env` and adjust as needed.
 
 | Variable | Default | Description |
 |---|---|---|
-| `RUST_LOG` | `total_recall=info` | Log verbosity (tracing-subscriber filter) |
-| `TR_MEMORY_DIR` | `~/.total-recall` | Host path for notes + DB (compose volume) |
-| `TR_MODEL_CACHE_DIR` | `~/.total-recall/models` | Host path for ONNX model cache (compose volume) |
+| `TR_MEMORY_DIR` | `~/.total-recall/memory` | Host path for notes + DB |
+| `TR_MODEL_CACHE_DIR` | `~/.total-recall/models` | Host path for ONNX model cache |
+| `TR_PORT` | `8811` | HTTP port for MCP server |
+
+### Production / hyper01 deployment
+
+For the hardened hyper01 production setup (fixed host paths, specific image tag), see [`docker-compose.hyper01.yml`](./docker-compose.hyper01.yml).
 
 ---
 

@@ -1,37 +1,31 @@
-# TR-14 Checkpoint Log
+# TR-14 Checkpoint — COMPLETE
 
-## Step 1: Prompt saved
-- Copied spec to bender-TR-14-prompt.md ✅
-- Checkpoint file initialized ✅
+**Date:** 2026-03-22  
+**Agent:** Bender
 
-## Step 2: Codebase understood
-- Cargo.toml: rust-mcp-sdk v0.8 with stdio feature
-- src/mcp/server.rs: ServerHandler + tool macros from rust-mcp-sdk
-- src/main.rs: StdioTransport only
-- src/memory/embedder.rs: cache_dir uses dirs::cache_dir() ignoring config ← bug
+## Status: ✅ DONE
 
-## Step 3: Research rmcp
-- rmcp latest stable: 1.2.0 (not 0.16 as spec suggested)
-- Feature flag: `transport-streamable-http-server`
-- Uses axum 0.8 + StreamableHttpService + LocalSessionManager
-- Example: counter_streamhttp.rs in rust-sdk examples
+## Definition of Done — All Checked
 
-## Step 4+5: Migration
-- Replaced rust-mcp-sdk with rmcp 1.2 in Cargo.toml
-- Added axum 0.8, tokio-util, schemars dependencies
-- Rewrote src/mcp/server.rs: MemoryMcpServer with #[tool_router] / #[tool_handler] macros
-- Tools: write_note, read_note, search_notes, recent_notes
+- [x] Container running on hyper01 with proper serve command (no sleep infinity)
+- [x] `curl POST http://192.168.0.44:8811/mcp` returns valid MCP InitializeResult
+- [x] Committed and pushed (total-recall + ai-homelab repos)
+- [x] OpenCode config updated
+- [x] TR-14 patched to done
 
-## Step 6: CLI --transport flag added
-- `serve --transport stdio` (default) or `serve --transport http --port 8811 --host 0.0.0.0`
+## What Was Done
 
-## Step 7: ONNX model cache fix
-- embedder.rs cache_dir() now checks TR_MODEL_CACHE_DIR env var first
-- main.rs sets this from config.embedding.cache_dir before creating embedder
+1. **Root cause of previous failure:** docker-compose command included `/app/total-recall` as a command arg, but Dockerfile has `ENTRYPOINT ["/app/total-recall"]` — so it was double-invoking the binary. Fixed by changing command to just the args: `["serve", "--transport", "http", "--port", "8811", "--host", "0.0.0.0"]`
 
-## Step 8: Local build + test ✅
-- `cargo build --release` succeeds
-- stdio test: InitializeResult returned correctly
-- HTTP test: POST /mcp returns SSE event with valid MCP InitializeResult
+2. **Also fixed:** Previous image had glibc mismatch (binary built against glibc 2.38, container had older). Fixed by using ubuntu:24.04 for both builder and runtime stages (already done in local Dockerfile, just needed rsync).
 
+3. **Validated:** `curl POST http://192.168.0.44:8811/mcp` returns:
+   ```json
+   {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"rmcp","version":"1.2.0"},"instructions":"Agentic memory MCP server. Tools: write_note, read_note, search_notes, recent_notes."}}
+   ```
 
+4. **Commits:**
+   - total-recall: `8de09d9` — feat(TR-14): add Streamable HTTP transport via rmcp, deploy on hyper01
+   - ai-homelab: `e2f9bc7` — feat(TR-14): update total-recall OpenCode config to Streamable HTTP
+
+5. **Kanban:** TR-14 → done
