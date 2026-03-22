@@ -63,3 +63,9 @@ __pycache__/
 bender-*.md
 *-checkpoint.md
 *-prompt.md
+WINS.md
+challenges.md
+implementation.md
+plan.md
+CONTEXT_FOR_AGENT.md
+*-task.md
