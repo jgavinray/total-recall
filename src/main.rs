@@ -4,13 +4,6 @@ mod mcp;
 mod memory;
 
 use clap::{Parser, Subcommand};
-use rust_mcp_sdk::error::SdkResult;
-use rust_mcp_sdk::McpServer;
-use rust_mcp_sdk::mcp_server::server_runtime;
-use rust_mcp_sdk::mcp_server::McpServerOptions;
-use rust_mcp_sdk::StdioTransport;
-use rust_mcp_sdk::ToMcpServerHandler;
-use rust_mcp_sdk::TransportOptions;
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -29,8 +22,17 @@ struct Cli {
 enum Commands {
     /// Start the MCP server
     Serve {
-        #[arg(long, default_value = "1000")]
-        timeout: u64,
+        /// Transport mode: "stdio" or "http"
+        #[arg(long, default_value = "stdio")]
+        transport: String,
+
+        /// Port for HTTP transport
+        #[arg(long, default_value = "8811")]
+        port: u16,
+
+        /// Host/address to bind for HTTP transport
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
     },
     /// Write a new note (or append to today's note if it already exists)
     Write {
@@ -74,10 +76,14 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> SdkResult<()> {
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let config_path = cli.config.clone().unwrap_or_else(|| {
+        // Also check env var TOTAL_RECALL_CONFIG
+        if let Ok(p) = std::env::var("TOTAL_RECALL_CONFIG") {
+            return PathBuf::from(p);
+        }
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".total-recall")
@@ -87,10 +93,8 @@ async fn main() -> SdkResult<()> {
     let config = match config::Config::load(&config_path) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Failed to load config: {}", e);
-            return Err(rust_mcp_sdk::error::McpSdkError::Internal {
-                description: format!("Failed to load config: {}", e)
-            });
+            eprintln!("Failed to load config: {}", e);
+            config::Config::default()
         }
     };
 
@@ -99,7 +103,7 @@ async fn main() -> SdkResult<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "total_recall=info".to_string().into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
     tracing::info!("Loading Total-Recall from {:?}", config_path);
@@ -107,8 +111,12 @@ async fn main() -> SdkResult<()> {
     tracing::info!("Database path: {:?}", config.db_path);
 
     match cli.command {
-        Some(Commands::Serve { .. }) | None => {
-            run_mcp_server(&config).await?;
+        Some(Commands::Serve { transport, port, host }) => {
+            run_mcp_server(&config, &transport, port, &host).await?;
+        }
+        None => {
+            // Default: run stdio server
+            run_mcp_server(&config, "stdio", 8811, "127.0.0.1").await?;
         }
         Some(Commands::Write { content, timestamp, append }) => {
             run_write(&config, &content, timestamp.as_deref(), append).await?;
@@ -119,11 +127,7 @@ async fn main() -> SdkResult<()> {
         Some(Commands::Search { query, limit, include_archived }) => {
             run_search(&config, &query, limit, include_archived).await?;
         }
-        Some(Commands::Recent {
-            limit,
-            days,
-            include_archived,
-        }) => {
+        Some(Commands::Recent { limit, days, include_archived }) => {
             run_recent(&config, limit, days, include_archived).await?;
         }
     }
@@ -131,61 +135,69 @@ async fn main() -> SdkResult<()> {
     Ok(())
 }
 
-async fn run_mcp_server(config: &config::Config) -> SdkResult<()> {
-    let store = match memory::store::MemoryStore::new(&config.db_path) {
-        Ok(s) => s,
-        Err(e) => {
-            let msg = format!("Failed to initialize database at {:?}: {}", config.db_path, e);
-            tracing::error!("{}", msg);
-            return Err(rust_mcp_sdk::error::McpSdkError::Internal {
-                description: msg,
-            });
+async fn run_mcp_server(
+    config: &config::Config,
+    transport: &str,
+    port: u16,
+    host: &str,
+) -> anyhow::Result<()> {
+    // Set env var so Embedder::cache_dir() picks up config's model cache path
+    // SAFETY: single-threaded at this point; no other threads reading env
+    unsafe {
+        std::env::set_var("TR_MODEL_CACHE_DIR", &config.embedding.cache_dir);
+    }
+
+    let store = memory::store::MemoryStore::new(&config.db_path).map_err(|e| {
+        anyhow::anyhow!("Failed to initialize database at {:?}: {}", config.db_path, e)
+    })?;
+
+    let server = mcp::server::MemoryMcpServer::new(store, config.memory_dir.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to create server: {}", e))?;
+
+    match transport {
+        "http" => {
+            use rmcp::transport::streamable_http_server::{
+                StreamableHttpServerConfig, StreamableHttpService,
+                session::local::LocalSessionManager,
+            };
+
+            let bind_addr = format!("{}:{}", host, port);
+            tracing::info!("Starting Streamable HTTP MCP server on {}", bind_addr);
+
+            let ct = tokio_util::sync::CancellationToken::new();
+            let ct_clone = ct.clone();
+
+            let service = StreamableHttpService::new(
+                move || Ok(server.clone()),
+                LocalSessionManager::default().into(),
+                StreamableHttpServerConfig {
+                    cancellation_token: ct.child_token(),
+                    ..Default::default()
+                },
+            );
+
+            let router = axum::Router::new().nest_service("/mcp", service);
+            let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+            tracing::info!("total-recall HTTP MCP server listening on {}", bind_addr);
+
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    tokio::signal::ctrl_c()
+                        .await
+                        .expect("failed to install CTRL+C handler");
+                    ct_clone.cancel();
+                })
+                .await?;
         }
-    };
-
-    tracing::info!("Starting MCP server via stdio...");
-
-    let server = match mcp::server::MemoryMcpServer::new(store, config.memory_dir.clone()) {
-        Ok(s) => s,
-        Err(e) => {
-            let msg = format!("Failed to create server: {}", e);
-            tracing::error!("{}", msg);
-            return Err(rust_mcp_sdk::error::McpSdkError::Internal {
-                description: msg,
-            });
+        _ => {
+            use rmcp::{ServiceExt, transport::stdio};
+            tracing::info!("Starting stdio MCP server...");
+            let service = server.serve(stdio()).await?;
+            service.waiting().await?;
         }
-    };
+    }
 
-    let server_details = rust_mcp_sdk::schema::InitializeResult {
-        server_info: rust_mcp_sdk::schema::Implementation {
-            name: "total-recall".into(),
-            version: env!("CARGO_PKG_VERSION").into(),
-            title: Some("Total Recall - Agentic Memory Server".into()),
-            description: Some("Memory storage with semantic search".into()),
-            icons: vec![],
-            website_url: None,
-        },
-        capabilities: rust_mcp_sdk::schema::ServerCapabilities {
-            tools: Some(rust_mcp_sdk::schema::ServerCapabilitiesTools { list_changed: None }),
-            ..Default::default()
-        },
-        protocol_version: rust_mcp_sdk::schema::ProtocolVersion::V2025_11_25.into(),
-        instructions: None,
-        meta: None,
-    };
-
-    let transport = StdioTransport::new(TransportOptions::default())?;
-    let handler = server.to_mcp_server_handler();
-    let server_runtime = server_runtime::create_server(McpServerOptions {
-        transport,
-        handler,
-        server_details,
-        task_store: None,
-        client_task_store: None,
-    });
-
-    tracing::info!("Memory store initialized at {:?}", config.db_path);
-    server_runtime.start().await
+    Ok(())
 }
 
 async fn run_write(
@@ -193,14 +205,9 @@ async fn run_write(
     content: &str,
     timestamp: Option<&str>,
     append: bool,
-) -> SdkResult<()> {
-    let store = match memory::store::MemoryStore::new(&config.db_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to initialize store: {}", e);
-            std::process::exit(1);
-        }
-    };
+) -> anyhow::Result<()> {
+    let store = memory::store::MemoryStore::new(&config.db_path)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
 
     let current_date = chrono::Utc::now().format("%m-%d-%Y").to_string();
     let final_content = if let Some(ts) = timestamp {
@@ -211,9 +218,7 @@ async fn run_write(
 
     if append {
         match store.append_note(&current_date, &final_content) {
-            Ok(note) => {
-                println!("Appended to note for {}", note.date);
-            }
+            Ok(note) => println!("Appended to note for {}", note.date),
             Err(e) => {
                 eprintln!("Error appending to note: {}", e);
                 std::process::exit(1);
@@ -226,11 +231,8 @@ async fn run_write(
                 println!("Title: {}", note.metadata.title.as_deref().unwrap_or("Untitled"));
             }
             Err(error::MemoryError::FileExistsError(_)) => {
-                // Auto-append if note already exists — don't fail
                 match store.append_note(&current_date, &final_content) {
-                    Ok(note) => {
-                        println!("Appended to existing note for {}", note.date);
-                    }
+                    Ok(note) => println!("Appended to existing note for {}", note.date),
                     Err(e) => {
                         eprintln!("Error appending to note: {}", e);
                         std::process::exit(1);
@@ -247,32 +249,14 @@ async fn run_write(
     Ok(())
 }
 
-async fn run_read(config: &config::Config, date: &str) -> SdkResult<()> {
-    let store = match memory::store::MemoryStore::new(&config.db_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to initialize store: {}", e);
-            std::process::exit(1);
-        }
-    };
+async fn run_read(config: &config::Config, date: &str) -> anyhow::Result<()> {
+    let store = memory::store::MemoryStore::new(&config.db_path)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
 
     match store.read_note(date) {
         Ok(note) => {
             println!("## {}\n", note.date);
             println!("{}", note.content);
-
-            if !note.observations.is_empty() {
-                println!("\n### Observations:");
-                for obs in &note.observations {
-                    let category = obs.category.as_deref().unwrap_or("note");
-                    println!("- [`{}`] {}: {}", category, obs.timestamp, obs.content);
-                    if !obs.tags.is_empty() {
-                        println!("  Tags: {}", obs.tags.join(", "));
-                    }
-                }
-            }
-
-            Ok(())
         }
         Err(error::MemoryError::NotFound(_)) => {
             eprintln!("No note found for date: {}", date);
@@ -283,6 +267,8 @@ async fn run_read(config: &config::Config, date: &str) -> SdkResult<()> {
             std::process::exit(1);
         }
     }
+
+    Ok(())
 }
 
 async fn run_search(
@@ -290,24 +276,16 @@ async fn run_search(
     query: &str,
     limit: usize,
     include_archived: bool,
-) -> SdkResult<()> {
-    let embedder = match memory::embedder::Embedder::new() {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Failed to initialize embedder: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let store = match memory::store::MemoryStore::new(&config.db_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to initialize store: {}", e);
-            std::process::exit(1);
-        }
-    };
+) -> anyhow::Result<()> {
+    unsafe {
+        std::env::set_var("TR_MODEL_CACHE_DIR", &config.embedding.cache_dir);
+    }
+    let embedder = memory::embedder::Embedder::new()
+        .map_err(|e| anyhow::anyhow!("Failed to initialize embedder: {}", e))?;
+    let store = memory::store::MemoryStore::new(&config.db_path)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
 
     let query_embedding = embedder.embed(query);
-
     match store.search_notes(&query_embedding, limit, include_archived) {
         Ok(notes) => {
             if notes.is_empty() {
@@ -320,13 +298,14 @@ async fn run_search(
                     println!("{}\n", content_preview);
                 }
             }
-            Ok(())
         }
         Err(e) => {
             eprintln!("Error searching: {}", e);
             std::process::exit(1);
         }
     }
+
+    Ok(())
 }
 
 async fn run_recent(
@@ -334,14 +313,9 @@ async fn run_recent(
     limit: usize,
     days: usize,
     include_archived: bool,
-) -> SdkResult<()> {
-    let store = match memory::store::MemoryStore::new(&config.db_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to initialize store: {}", e);
-            std::process::exit(1);
-        }
-    };
+) -> anyhow::Result<()> {
+    let store = memory::store::MemoryStore::new(&config.db_path)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
 
     match store.get_recent_notes(limit, days, include_archived) {
         Ok(notes) => {
@@ -354,11 +328,12 @@ async fn run_recent(
                     println!("- **{}** ({})", note.date, title);
                 }
             }
-            Ok(())
         }
         Err(e) => {
             eprintln!("Error getting recent notes: {}", e);
             std::process::exit(1);
         }
     }
+
+    Ok(())
 }

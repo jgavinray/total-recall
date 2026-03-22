@@ -215,6 +215,13 @@ impl Embedder {
     }
 
     fn cache_dir() -> Result<PathBuf> {
+        // Prefer TR_MODEL_CACHE_DIR env var (set from config.embedding.cache_dir)
+        if let Ok(dir) = std::env::var("TR_MODEL_CACHE_DIR") {
+            let p = PathBuf::from(dir);
+            if !p.as_os_str().is_empty() {
+                return Ok(p);
+            }
+        }
         let base = dirs::cache_dir().ok_or_else(|| {
             MemoryError::Embedding("Could not determine cache directory".to_string())
         })?;

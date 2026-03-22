@@ -1,20 +1,22 @@
 # Total-Recall — hyper01 production deployment
 # ============================================
+# Streamable HTTP transport on port 8811 (/mcp endpoint)
 # Data persisted to /archive/zoidberg/total-recall on host.
-# MCP proxy on port 8811 for network-accessible MCP access.
 #
 # Prerequisites:
 #   sudo mkdir -p /archive/zoidberg/total-recall/memory /archive/zoidberg/total-recall/models
-#   sudo chown -R jgavinray:jgavinray /archive/zoidberg/total-recall
-#   docker build -t total-recall:latest .
+#   sudo chown -R zoidberg:zoidberg /archive/zoidberg/total-recall
+#   docker build -f Dockerfile -t total-recall:latest .
 #
 # Start:
 #   docker compose -f docker-compose.hyper01.yml up -d
 #
 # Validate:
-#   docker exec total-recall /app/total-recall write "deployment test"
-#   docker exec total-recall /app/total-recall recent
-#   ls /archive/zoidberg/total-recall/memory/
+#   curl -X POST http://192.168.0.44:8811/mcp \
+#     -H 'Content-Type: application/json' \
+#     -H 'Accept: application/json, text/event-stream' \
+#     -H 'MCP-Protocol-Version: 2025-06-18' \
+#     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}'
 
 services:
   total-recall:
@@ -22,41 +24,23 @@ services:
     container_name: total-recall
     restart: unless-stopped
 
+    command: ["serve", "--transport", "http", "--port", "8811", "--host", "0.0.0.0"]
+
+    ports:
+      - "8811:8811"
+
     environment:
       # Config file path inside container
       TOTAL_RECALL_CONFIG: /data/config.yaml
-      # Suppress verbose tracing
-      RUST_LOG: "off"
+      # Model cache — maps to config.embedding.cache_dir
+      TR_MODEL_CACHE_DIR: /data/models
+      # Log level
+      RUST_LOG: "total_recall=info"
 
     volumes:
       # Memory directory — daily Markdown notes and SQLite index
       - /archive/zoidberg/total-recall/memory:/data/memory
-      # Model cache — ONNX embedding model
+      # Model cache — ONNX embedding model (survives container restarts)
       - /archive/zoidberg/total-recall/models:/data/models
-
-    # total-recall is a stdio MCP server.
-    # For network-accessible MCP, wrap with mcp-proxy (see below).
-    # docker exec -i total-recall /app/total-recall serve  <-- stdio passthrough
-
-    # Keep container alive even when not actively serving MCP
-    # (CLI subcommands exec into it on demand)
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["sleep infinity"]
-
-  # mcp-proxy — exposes total-recall's stdio MCP server over HTTP/SSE on port 8811
-  # Install on host: pip install mcp-proxy
-  # Or run as a separate Docker service if mcp-proxy has a container image.
-  # This service is optional — remove if using docker exec only.
-  #
-  # total-recall-mcp-proxy:
-  #   image: python:3.11-slim
-  #   container_name: total-recall-mcp-proxy
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8811:8811"
-  #   command: >
-  #     sh -c "pip install mcp-proxy &&
-  #            mcp-proxy --port 8811 --
-  #            docker exec -i total-recall /app/total-recall serve"
-  #   depends_on:
-  #     - total-recall
+      # Config
+      - /archive/zoidberg/total-recall/config.yaml:/data/config.yaml:ro

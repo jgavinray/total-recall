@@ -9,12 +9,24 @@ repository = "https://github.com/jgavinray/total-recall"
 build = "build.rs"
 
 [dependencies]
-# MCP SDK for Model Context Protocol
-rust-mcp-sdk = { version = "0.8", features = ["server", "stdio"]}
-num_enum = "0.7"
+# MCP SDK — official Rust SDK (modelcontextprotocol/rust-sdk)
+rmcp = { version = "1.2", features = [
+    "server",
+    "macros",
+    "transport-io",
+    "transport-streamable-http-server",
+    "schemars",
+] }
+
+# HTTP layer for Streamable HTTP transport
+axum = { version = "0.8", features = ["macros"] }
+tokio-util = "0.7"
+
+# JSON schema generation (required by rmcp macros)
+schemars = "1.0"
 
 # Async runtime
-tokio = { version = "1.46", features = ["full", "rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["full", "rt-multi-thread", "macros", "sync", "time"] }
 
 # SQLite with sqlite-vec extension (bundled via sqlite-vec crate)
 rusqlite = { version = "0.30", features = ["bundled"] }

@@ -1,7 +1,17 @@
 # ─── Stage 1: Builder ─────────────────────────────────────────────────────────
-# Chainguard/Wolfi hardened Rust image (-dev variant has shell + build tools).
-# Produces a static binary (musl/crt-static) so the runtime needs no libc.
-FROM cgr.dev/chainguard/rust:latest-dev AS builder
+# Use Rust on Ubuntu 24.04 to match hyper01's glibc
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 
@@ -11,24 +21,23 @@ COPY Cargo.toml Cargo.lock build.rs ./
 # Copy source tree
 COPY src/ ./src/
 
-# Build a static release binary
-# target-feature=+crt-static links the C runtime statically (needed for the
-# Chainguard static runtime image which has no libc).
-RUN RUSTFLAGS='-C target-feature=+crt-static' \
-    cargo build --release --locked
+# Build release binary
+RUN cargo build --release --locked
 
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
-# Minimal, hardened image — no shell, no build tools, no package manager.
-# Chainguard static images run as UID 65532 (nonroot) by default.
-FROM cgr.dev/chainguard/static:latest
+# Ubuntu 24.04 to match hyper01's glibc 2.39
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy the statically-linked binary from the builder
+# Copy the binary from the builder
 COPY --from=builder /app/target/release/total-recall /app/total-recall
 
-# total-recall communicates via stdio (MCP protocol).
-# Data dirs are expected to be mounted at /data — map your host paths there.
-# See .env.example for runtime configuration.
+# Data dirs mounted at /data from host
+# Config via TOTAL_RECALL_CONFIG env var
 ENTRYPOINT ["/app/total-recall"]
 CMD ["serve"]

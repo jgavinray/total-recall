@@ -117,3 +117,28 @@ Depends on hyper01 Docker deployment (blocked — same SSH key issue).
 2. Run the 5-line deploy sequence
 
 Everything else is done, committed, and functional.
+
+## Hyper01 Docker Deployment — 2026-03-22
+
+### What was done
+- SSH confirmed working as `zoidberg@192.168.0.44`
+- Created `/archive/zoidberg/total-recall/{memory,models}` (no sudo needed — zoidberg owns `/archive/zoidberg/`)
+- Rsynced repo to `/home/zoidberg/total-recall/`
+- Built `total-recall:latest` Docker image using `Dockerfile.hyper01` (ubuntu:24.04 base, glibc 2.39 compatible)
+  - Original Dockerfile failed: `cgr.dev/chainguard/rust:latest-dev` + `+crt-static` breaks proc-macros
+  - First fix (debian:bookworm-slim) failed: glibc 2.38/2.39 mismatch vs runtime
+  - Final fix: ubuntu:24.04 for both builder and runtime — matches hyper01 host glibc 2.39
+- docker-compose.hyper01.yml uses `sleep infinity` entrypoint (serve is stdio MCP, exits when stdin closes)
+- config.yaml at `/archive/zoidberg/total-recall/config.yaml` mounts into container at `/data/config.yaml`
+- `write` and `recent` confirmed working with `--config /data/config.yaml`
+- Data persists to `/archive/zoidberg/total-recall/memory/memory.db`
+- TR-12 PATCH → done on kanban
+
+### Known differences from spec
+- Notes stored as SQLite DB (`memory.db`), not individual `.md` files per date (that's the implementation)
+- ONNX model still downloads to `/root/.cache` inside container (not `/data/models`) — `cache_dir` config field exists but wasn't wired to model downloads in this version
+
+### Container status
+- Running: `total-recall:latest` on hyper01
+- Entrypoint: `sleep infinity` (CLI tool, invoked via `docker exec`)
+- Volumes: memory and models at `/archive/zoidberg/total-recall/`
