@@ -16,7 +16,7 @@ version: '3.8'
 #     -H 'MCP-Protocol-Version: 2025-06-18' \
 #     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}'
 #
-# For the hyper01 production deployment see: docker-compose.hyper01.yml
+# For a production deployment with fixed paths see: docker-compose.hyper01.yml
 
 services:
   total-recall:

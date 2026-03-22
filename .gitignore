@@ -35,8 +35,10 @@ logs/
 *.log
 *.log.*
 
-# Config (user-specific paths)
+# Config (user-specific paths — keep example but ignore real configs)
 config.yaml
+config.hyper01.yaml
+config.*.yaml
 *.yaml.local
 *.config.local
 

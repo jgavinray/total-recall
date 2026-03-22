@@ -38,7 +38,7 @@ Add to `~/Library/Application Support/Claude/mcp_servers/total-recall.json`:
 {
   "mcpServers": {
     "total-recall": {
-      "command": "/Users/jgavinray/dev/total-recall/target/release/total-recall",
+      "command": "/path/to/total-recall",
       "args": ["mcp"],
       "cwd": "~/.openclaw/mcp"
     }

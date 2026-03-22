@@ -2,10 +2,8 @@
 
 **Ticket:** SPARK-1  
 **Goal:** Run Nemotron-3-Super-120B NVFP4 via TensorRT-LLM on DGX Spark GB10 for 3–5× throughput over llama.cpp  
-**Last Updated:** 2026-03-20 (live SSH audit — zoidberg@192.168.0.33)  
+**Last Updated:** 2026-03-20 (live SSH audit)  
 **Status:** Research Complete — All acceptance criteria met  
-
-> **Canonical copy:** `/Users/jgavinray/Obsidian/personal/zoidberg/docs/spark-trtllm-runbook.md`
 
 ---
 
@@ -14,8 +12,8 @@
 ### SSH Access
 
 ```
-Host:  192.168.0.33
-User:  zoidberg  (NOT gavinray — that user has no SSH key)
+Host:  spark.local  (replace with your DGX Spark IP or hostname)
+User:  your-user
 Key:   ~/.ssh/id_ed25519
 ```
 
@@ -151,14 +149,14 @@ ImportError: libnvinfer.so.10: cannot open shared object file: No such file or d
 ### 1. Free GPU Memory
 
 ```bash
-ssh zoidberg@192.168.0.33
+ssh your-user@spark.local
 sudo kill 2662947 2662954  # Stop llama.cpp instances
 ```
 
 ### 2. Download Model Weights
 
 ```bash
-ssh zoidberg@192.168.0.33
+ssh your-user@spark.local
 pip install huggingface_hub
 # Repo: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 (80.4 GB)
 # Stage to Spark directly — 2.7 TB free on /, ample headroom
@@ -207,7 +205,7 @@ trtllm-serve serve /models/nemotron-3-super-120b-nvfp4 \
 ## SPARK-2: Container Boot & sm_121 Kernel Validation
 
 **Ticket:** SPARK-2  
-**Date:** 2026-03-20 (live SSH — zoidberg@192.168.0.33)  
+**Date:** 2026-03-20 (live SSH — your-user@spark.local)  
 **Validated:** 2026-03-20 03:24–03:26 UTC (live container execution)  
 **Status:** ✅ All acceptance criteria met — LIVE VALIDATED
 
@@ -388,7 +386,7 @@ This warning is advisory only — all tests passed regardless.
    docker run --rm -it --gpus all \
      --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
      -e LD_LIBRARY_PATH=/usr/local/tensorrt/targets/aarch64-linux-gnu/lib:$LD_LIBRARY_PATH \
-     -v /archive/zoidberg/models:/models \
+     -v /data/models:/models \
      -p 8000:8000 \
      nvcr.io/nvidia/tensorrt-llm/release:spark-single-gpu-dev \
      bash
@@ -423,15 +421,15 @@ This warning is advisory only — all tests passed regardless.
 ### Download Decision: Spark Directly
 
 - **Spark disk free:** 2.7 TB (plenty for 80.4 GB weights + ~400–640 GB engine build workspace)
-- **Decision:** Download directly to Spark (`/models/nemotron-3-super-120b-nvfp4`) — no need to stage on hyper01
-- **Staging on hyper01** (`/archive/zoidberg/models/`) is an option but unnecessary given available space
+- **Decision:** Download directly to Spark (`/models/nemotron-3-super-120b-nvfp4`) — no need to stage on another host
+- **Staging on a secondary host** is an option but unnecessary given available space
 
 ---
 
 ### Download Command
 
 ```bash
-ssh zoidberg@192.168.0.33
+ssh your-user@spark.local
 pip install -q huggingface_hub
 
 # Download with built-in checksum verification (HF hub verifies SHA256 automatically)

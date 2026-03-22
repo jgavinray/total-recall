@@ -1,18 +1,18 @@
-# Total-Recall — hyper01 production deployment
+# Total-Recall — production deployment (example)
 # ============================================
 # Streamable HTTP transport on port 8811 (/mcp endpoint)
-# Data persisted to /archive/zoidberg/total-recall on host.
+# Data persisted to /data/total-recall on host.
 #
 # Prerequisites:
-#   sudo mkdir -p /archive/zoidberg/total-recall/memory /archive/zoidberg/total-recall/models
-#   sudo chown -R zoidberg:zoidberg /archive/zoidberg/total-recall
+#   sudo mkdir -p /data/total-recall/memory /data/total-recall/models
+#   sudo chown -R your-user:your-user /data/total-recall
 #   docker build -f Dockerfile -t total-recall:latest .
 #
 # Start:
 #   docker compose -f docker-compose.hyper01.yml up -d
 #
 # Validate:
-#   curl -X POST http://192.168.0.44:8811/mcp \
+#   curl -X POST http://your-host:8811/mcp \
 #     -H 'Content-Type: application/json' \
 #     -H 'Accept: application/json, text/event-stream' \
 #     -H 'MCP-Protocol-Version: 2025-06-18' \
@@ -39,8 +39,8 @@ services:
 
     volumes:
       # Memory directory — daily Markdown notes and SQLite index
-      - /archive/zoidberg/total-recall/memory:/data/memory
+      - /data/total-recall/memory:/data/memory
       # Model cache — ONNX embedding model (survives container restarts)
-      - /archive/zoidberg/total-recall/models:/data/models
+      - /data/total-recall/models:/data/models
       # Config
-      - /archive/zoidberg/total-recall/config.yaml:/data/config.yaml:ro
+      - /data/total-recall/config.yaml:/data/config.yaml:ro

@@ -496,9 +496,9 @@ Copy `.env.example` to `.env` and adjust as needed.
 | `TR_MODEL_CACHE_DIR` | `~/.total-recall/models` | Host path for ONNX model cache |
 | `TR_PORT` | `8811` | HTTP port for MCP server |
 
-### Production / hyper01 deployment
+### Production deployment
 
-For the hardened hyper01 production setup (fixed host paths, specific image tag), see [`docker-compose.hyper01.yml`](./docker-compose.hyper01.yml).
+For a production setup with fixed host paths and a specific image tag, see [`docker-compose.hyper01.yml`](./docker-compose.hyper01.yml).
 
 ---
 
