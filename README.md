@@ -491,6 +491,10 @@ See [`.env.example`](.env.example) for the full reference.
 
 ---
 
+## OpenClaw Extension
+
+An OpenClaw plugin that exposes Total Recall's episodic memory tools (`tr_store`, `tr_search`, `tr_recall`) as native MCP tools for OpenClaw agents. See [extensions/openclaw/README.md](./extensions/openclaw/README.md) for setup and usage.
+
 ## License
 
 GPL-2.0 — see [LICENSE](LICENSE).

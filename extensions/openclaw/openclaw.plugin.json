@@ -1,0 +1,22 @@
+{
+  "id": "total-recall-tools",
+  "name": "Total Recall Tools",
+  "version": "0.2.0",
+  "description": "Exposes tr_store, tr_search, and tr_recall tools for agentic episodic memory via the total-recall MCP HTTP server",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "serverUrl": {
+        "type": "string",
+        "description": "URL of the total-recall MCP HTTP server (default: http://localhost:8811/mcp)",
+        "default": "http://localhost:8811/mcp"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Request timeout in milliseconds",
+        "default": 15000
+      }
+    }
+  }
+}
