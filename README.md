@@ -2,7 +2,7 @@
 
 **Agentic memory MCP server** — persistent, searchable notes with semantic vector search, backed by SQLite and plain Markdown files.
 
-Total-Recall gives AI agents (Claude Desktop, opencode, or any MCP-compatible client) a long-term memory layer. Notes are written as human-readable Markdown files and indexed in SQLite with 384-dimensional vector embeddings for semantic search.
+Total-Recall gives AI agents (Claude Desktop, opencode, or any MCP-compatible client) a long-term memory layer. Notes are written as human-readable Markdown files and indexed in SQLite with 1024-dimensional Snowflake vector embeddings for semantic search.
 
 ---
 
@@ -91,7 +91,7 @@ That's it! You're connected. See the [Configuration](#configuration) and [CLI Us
 
 - **Stores notes** as dated Markdown files (`mm-dd-yyyy.md`) under `~/.total-recall/`
 - **Indexes observations** (decisions, actions, notes, ideas, questions, risks) into SQLite
-- **Embeds content** using `all-MiniLM-L6-v2` (via ONNX) for semantic similarity search
+- **Embeds content** using `Snowflake/snowflake-arctic-embed-l-v2.0` (via ONNX) for semantic similarity search
 - **Exposes 5 MCP tools** to any connected AI agent:
   - `write_note` — create a new dated note (immutable once written)
   - `read_note` — retrieve a note by date
@@ -158,9 +158,10 @@ logging:
   backup_count: 3
 
 embedding:
-  model: sentence-transformers/all-MiniLM-L6-v2
-  dimension: 384
-  cache_dir: ~/.total-recall/models
+  model: Snowflake/snowflake-arctic-embed-l-v2.0
+  model_path: /data/models/embed
+  dimension: 1024
+  cache_dir: /data/models/embed
 
 search:
   default_limit: 10
@@ -388,7 +389,7 @@ Initial kickoff discussion.
 ├── 02-2026/
 │   └── 02-28-2026.md
 ├── models/                # Downloaded ONNX model (auto)
-│   └── all-MiniLM-L6-v2/
+│   └── snowflake-arctic-embed-l-v2.0/
 ├── logs/
 │   └── server.log
 ├── memory.db              # SQLite index + vector embeddings
@@ -481,7 +482,7 @@ curl -X POST http://localhost:8811/mcp \
 
 The compose file mounts two host paths (all configurable via `.env`):
 - `TR_MEMORY_DIR` (default: `~/.total-recall/memory`) — daily notes + SQLite index
-- `TR_MODEL_CACHE_DIR` (default: `~/.total-recall/models`) — cached ONNX model
+- `embedding.model_path` (default: `/data/models/embed`) — configured ONNX model directory
 - `TR_PORT` (default: `8811`) — HTTP port
 
 total-recall exposes an **HTTP MCP server** (`/mcp` endpoint, Streamable HTTP transport). Wire it to any MCP client using `http://localhost:8811/mcp`.
@@ -493,7 +494,7 @@ Copy `.env.example` to `.env` and adjust as needed.
 | Variable | Default | Description |
 |---|---|---|
 | `TR_MEMORY_DIR` | `~/.total-recall/memory` | Host path for notes + DB |
-| `TR_MODEL_CACHE_DIR` | `~/.total-recall/models` | Host path for ONNX model cache |
+| `embedding.model_path` | `/data/models/embed` | Host path for the configured ONNX model directory |
 | `TR_PORT` | `8811` | HTTP port for MCP server |
 
 ### Production deployment

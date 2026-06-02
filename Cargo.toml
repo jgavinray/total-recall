@@ -34,7 +34,7 @@ rusqlite = { version = "0.30", features = ["bundled"] }
 # ONNX for embeddings (using release candidate until stable 2.0)
 ort = "2.0.0-rc.12"
 
-# Tokenizer for BERT-based embeddings (all-MiniLM-L6-v2)
+# Tokenizer for the configured Snowflake embedding model
 # fancy-regex is pure Rust (avoids C onig dependency)
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 

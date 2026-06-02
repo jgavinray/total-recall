@@ -1,4 +1,4 @@
-use crate::error::{MemoryError, Result};
+use crate::error::Result;
 use crate::memory::models::Observation;
 
 pub struct FileParser;
@@ -158,7 +158,10 @@ mod tests {
         // cleaning logic. full_context always preserves the original line verbatim.
         let obs = FileParser::parse_observations(sample_note()).unwrap();
         for o in &obs {
-            assert!(!o.full_context.is_empty(), "full_context should always be non-empty");
+            assert!(
+                !o.full_context.is_empty(),
+                "full_context should always be non-empty"
+            );
         }
     }
 
@@ -166,7 +169,10 @@ mod tests {
     fn test_parse_observations_full_context_preserved() {
         let obs = FileParser::parse_observations(sample_note()).unwrap();
         // full_context should contain the bracket notation
-        assert!(obs[0].full_context.contains("[task]"), "full_context should contain the original line");
+        assert!(
+            obs[0].full_context.contains("[task]"),
+            "full_context should contain the original line"
+        );
     }
 
     #[test]

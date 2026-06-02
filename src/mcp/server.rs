@@ -1,10 +1,8 @@
+use crate::config::EmbeddingConfig;
 use crate::memory::embedder::Embedder;
 use crate::memory::store::MemoryStore;
 use rmcp::{
-    ErrorData as McpError, ServerHandler,
-    handler::server::wrapper::Parameters,
-    model::*,
-    schemars,
+    ErrorData as McpError, ServerHandler, handler::server::wrapper::Parameters, model::*, schemars,
     tool, tool_handler, tool_router,
 };
 use std::sync::Arc;
@@ -56,8 +54,9 @@ impl MemoryMcpServer {
     pub fn new(
         store: MemoryStore,
         _memory_dir: std::path::PathBuf,
+        embedding_config: &EmbeddingConfig,
     ) -> std::result::Result<Self, crate::error::MemoryError> {
-        let embedder = Embedder::new()?;
+        let embedder = Embedder::from_config(embedding_config)?;
         Ok(Self {
             store: Arc::new(RwLock::new(store)),
             embedder: Arc::new(embedder),

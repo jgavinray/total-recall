@@ -32,8 +32,6 @@ services:
     environment:
       # Config file path inside container
       TOTAL_RECALL_CONFIG: /data/config.yaml
-      # Model cache — maps to config.embedding.cache_dir
-      TR_MODEL_CACHE_DIR: /data/models
       # Log level
       RUST_LOG: "total_recall=info"
 

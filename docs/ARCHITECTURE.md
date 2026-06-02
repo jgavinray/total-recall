@@ -22,7 +22,7 @@
 │     Memory Layer        │   │     Embedding Layer         │
 │  src/memory/store.rs    │   │  src/memory/embedder.rs     │
 │  MemoryStore            │   │  Embedder (ONNX session)    │
-│  create/read/search     │   │  all-MiniLM-L6-v2 (384d)   │
+│  create/read/search     │   │  Snowflake embed (1024d)   │
 └──────┬──────────────────┘   └─────────────────────────────┘
        │
 ┌──────▼──────────────────────────────────────────────────────┐
@@ -51,7 +51,7 @@
 | `src/memory/models.rs` | Domain types: `Note`, `NoteMetadata` (with YAML frontmatter parser), `Observation`. |
 | `src/memory/file_parser.rs` | `FileParser::parse_observations` — walks note text line by line to extract timestamped bullet observations with categories and hashtag tags. |
 | `src/memory/store.rs` | `MemoryStore` — SQLite wrapper (rusqlite + sqlite-vec); owns all database operations: `create_note`, `read_note`, `search_notes`, `get_recent_notes`, `archive_note`, `restore_note`. |
-| `src/memory/embedder.rs` | `Embedder` — downloads and caches the all-MiniLM-L6-v2 ONNX model and tokenizer, tokenizes text, runs ONNX inference, mean-pools with attention mask, L2-normalizes → 384-dim vector. |
+| `src/memory/embedder.rs` | `Embedder` — loads the configured Snowflake ONNX model and tokenizer, tokenizes text, runs ONNX inference, mean-pools with attention mask, L2-normalizes → 1024-dim vector. |
 
 ---
 
@@ -92,7 +92,7 @@ CREATE TABLE observations (
 
 ```sql
 CREATE VIRTUAL TABLE vec_observations USING vec0(
-    embedding float[384]            -- rowid matches observations.rowid
+    embedding float[1024]           -- rowid matches observations.rowid
 );
 ```
 
@@ -133,7 +133,7 @@ archived: false
 
 All semantic indexing and search goes through `src/memory/embedder.rs`:
 
-1. **Model acquisition** — On first use, `Embedder::new()` downloads `all-MiniLM-L6-v2.onnx` and `all-MiniLM-L6-v2-tokenizer.json` from HuggingFace into `~/.cache/total-recall/`. Subsequent starts use the cache.
+1. **Model acquisition** — `Embedder::new()` loads the configured Snowflake model from `embedding.model_path`.
 
 2. **Tokenization** — `tokenizers` crate encodes input text into `input_ids`, `attention_mask`, and `token_type_ids` tensors. Truncates at 128 tokens; right-pads batches to longest sequence.
 
@@ -180,13 +180,13 @@ MemoryStore::create_note(date, content)
     │
     └─► for each Observation:
             INSERT INTO observations (...)
-            Embedder::embed(obs.content) → [f32; 384]
+            Embedder::embed(obs.content) → [f32; 1024]
             INSERT INTO vec_observations(rowid, vec_f32(...))
 
 ── later: search_notes("embedder refactor") ──
 
     ▼
-Embedder::embed("embedder refactor") → query_vec: [f32; 384]
+Embedder::embed("embedder refactor") → query_vec: [f32; 1024]
     │
     ▼
 MemoryStore::search_notes(query_vec, limit=10)
@@ -211,7 +211,7 @@ Vec<Note> returned → formatted as text content in CallToolResult
 | `rusqlite` | 0.30 | SQLite bindings (bundled SQLite) |
 | `sqlite-vec` | 0.1.6 | sqlite-vec extension (vec0 virtual table, KNN search) |
 | `ort` | 2.0.0-rc.12 | ONNX Runtime for embedding inference |
-| `tokenizers` | 0.21 | HuggingFace tokenizer (all-MiniLM-L6-v2, fancy-regex backend) |
+| `tokenizers` | 0.21 | HuggingFace tokenizer for the configured Snowflake embedding model |
 | `tokio` | 1.46 | Async runtime |
 | `clap` | 4.5 | CLI argument parsing |
 | `serde_yaml` | 0.9 | Config file parsing |

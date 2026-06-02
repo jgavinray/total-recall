@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,7 +79,10 @@ mod tests {
         assert_eq!(meta.title, Some("My Note".to_string()));
         assert_eq!(meta.date, Some("2026-03-09".to_string()));
         assert_eq!(meta.r#type, Some("daily".to_string()));
-        assert_eq!(meta.tags, Some(vec!["rust".to_string(), "testing".to_string()]));
+        assert_eq!(
+            meta.tags,
+            Some(vec!["rust".to_string(), "testing".to_string()])
+        );
         assert_eq!(meta.archived, Some(false));
     }
 

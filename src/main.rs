@@ -1,10 +1,6 @@
-mod config;
-mod error;
-mod mcp;
-mod memory;
-
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use total_recall::{config, error, mcp, memory};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
@@ -109,25 +105,46 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Loading Total-Recall from {:?}", config_path);
     tracing::info!("Memory directory: {:?}", config.memory_dir);
     tracing::info!("Database path: {:?}", config.db_path);
+    tracing::info!(
+        model = %config.embedding.model,
+        dimension = config.embedding.dimension,
+        "Embedding model configured"
+    );
 
     match cli.command {
-        Some(Commands::Serve { transport, port, host }) => {
+        Some(Commands::Serve {
+            transport,
+            port,
+            host,
+        }) => {
             run_mcp_server(&config, &transport, port, &host).await?;
         }
         None => {
             // Default: run stdio server
             run_mcp_server(&config, "stdio", 8811, "127.0.0.1").await?;
         }
-        Some(Commands::Write { content, timestamp, append }) => {
+        Some(Commands::Write {
+            content,
+            timestamp,
+            append,
+        }) => {
             run_write(&config, &content, timestamp.as_deref(), append).await?;
         }
         Some(Commands::Read { date }) => {
             run_read(&config, &date).await?;
         }
-        Some(Commands::Search { query, limit, include_archived }) => {
+        Some(Commands::Search {
+            query,
+            limit,
+            include_archived,
+        }) => {
             run_search(&config, &query, limit, include_archived).await?;
         }
-        Some(Commands::Recent { limit, days, include_archived }) => {
+        Some(Commands::Recent {
+            limit,
+            days,
+            include_archived,
+        }) => {
             run_recent(&config, limit, days, include_archived).await?;
         }
     }
@@ -141,18 +158,19 @@ async fn run_mcp_server(
     port: u16,
     host: &str,
 ) -> anyhow::Result<()> {
-    // Set env var so Embedder::cache_dir() picks up config's model cache path
-    // SAFETY: single-threaded at this point; no other threads reading env
-    unsafe {
-        std::env::set_var("TR_MODEL_CACHE_DIR", &config.embedding.cache_dir);
-    }
+    let store =
+        memory::store::MemoryStore::new_with_embedding_config(&config.db_path, &config.embedding)
+            .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to initialize database at {:?}: {}",
+                config.db_path,
+                e
+            )
+        })?;
 
-    let store = memory::store::MemoryStore::new(&config.db_path).map_err(|e| {
-        anyhow::anyhow!("Failed to initialize database at {:?}: {}", config.db_path, e)
-    })?;
-
-    let server = mcp::server::MemoryMcpServer::new(store, config.memory_dir.clone())
-        .map_err(|e| anyhow::anyhow!("Failed to create server: {}", e))?;
+    let server =
+        mcp::server::MemoryMcpServer::new(store, config.memory_dir.clone(), &config.embedding)
+            .map_err(|e| anyhow::anyhow!("Failed to create server: {}", e))?;
 
     match transport {
         "http" => {
@@ -206,8 +224,9 @@ async fn run_write(
     timestamp: Option<&str>,
     append: bool,
 ) -> anyhow::Result<()> {
-    let store = memory::store::MemoryStore::new(&config.db_path)
-        .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
+    let store =
+        memory::store::MemoryStore::new_with_embedding_config(&config.db_path, &config.embedding)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
 
     let current_date = chrono::Utc::now().format("%m-%d-%Y").to_string();
     let final_content = if let Some(ts) = timestamp {
@@ -228,7 +247,10 @@ async fn run_write(
         match store.create_note(&current_date, &final_content) {
             Ok(note) => {
                 println!("Created note for {}", note.date);
-                println!("Title: {}", note.metadata.title.as_deref().unwrap_or("Untitled"));
+                println!(
+                    "Title: {}",
+                    note.metadata.title.as_deref().unwrap_or("Untitled")
+                );
             }
             Err(error::MemoryError::FileExistsError(_)) => {
                 match store.append_note(&current_date, &final_content) {
@@ -250,8 +272,9 @@ async fn run_write(
 }
 
 async fn run_read(config: &config::Config, date: &str) -> anyhow::Result<()> {
-    let store = memory::store::MemoryStore::new(&config.db_path)
-        .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
+    let store =
+        memory::store::MemoryStore::new_with_embedding_config(&config.db_path, &config.embedding)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
 
     match store.read_note(date) {
         Ok(note) => {
@@ -277,13 +300,11 @@ async fn run_search(
     limit: usize,
     include_archived: bool,
 ) -> anyhow::Result<()> {
-    unsafe {
-        std::env::set_var("TR_MODEL_CACHE_DIR", &config.embedding.cache_dir);
-    }
-    let embedder = memory::embedder::Embedder::new()
+    let embedder = memory::embedder::Embedder::from_config(&config.embedding)
         .map_err(|e| anyhow::anyhow!("Failed to initialize embedder: {}", e))?;
-    let store = memory::store::MemoryStore::new(&config.db_path)
-        .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
+    let store =
+        memory::store::MemoryStore::new_with_embedding_config(&config.db_path, &config.embedding)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
 
     let query_embedding = embedder.embed(query);
     match store.search_notes(&query_embedding, limit, include_archived) {
@@ -314,8 +335,9 @@ async fn run_recent(
     days: usize,
     include_archived: bool,
 ) -> anyhow::Result<()> {
-    let store = memory::store::MemoryStore::new(&config.db_path)
-        .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
+    let store =
+        memory::store::MemoryStore::new_with_embedding_config(&config.db_path, &config.embedding)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize store: {}", e))?;
 
     match store.get_recent_notes(limit, days, include_archived) {
         Ok(notes) => {

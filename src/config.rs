@@ -98,6 +98,9 @@ pub struct EmbeddingConfig {
     #[serde(default)]
     pub model: String,
 
+    #[serde(default = "default_model_path")]
+    pub model_path: PathBuf,
+
     #[serde(default = "default_dimension")]
     pub dimension: usize,
 
@@ -109,6 +112,7 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             model: default_model(),
+            model_path: default_model_path(),
             dimension: default_dimension(),
             cache_dir: default_cache_dir(),
         }
@@ -116,15 +120,19 @@ impl Default for EmbeddingConfig {
 }
 
 fn default_model() -> String {
-    "sentence-transformers/all-MiniLM-L6-v2".to_string()
+    "Snowflake/snowflake-arctic-embed-l-v2.0".to_string()
+}
+
+fn default_model_path() -> PathBuf {
+    PathBuf::from("/data/models/embed")
 }
 
 fn default_dimension() -> usize {
-    384
+    1024
 }
 
 fn default_cache_dir() -> PathBuf {
-    default_memory_dir().join("models")
+    PathBuf::from("/data/models/embed")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,9 +272,13 @@ mod tests {
         let config = Config::default();
         assert_eq!(
             config.embedding.model,
-            "sentence-transformers/all-MiniLM-L6-v2"
+            "Snowflake/snowflake-arctic-embed-l-v2.0"
         );
-        assert_eq!(config.embedding.dimension, 384);
+        assert_eq!(
+            config.embedding.model_path,
+            PathBuf::from("/data/models/embed")
+        );
+        assert_eq!(config.embedding.dimension, 1024);
     }
 
     #[test]

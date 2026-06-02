@@ -1,4 +1,4 @@
-pub mod models;
-pub mod file_parser;
-pub mod store;
 pub mod embedder;
+pub mod file_parser;
+pub mod models;
+pub mod store;

@@ -1,106 +1,106 @@
+use crate::config::EmbeddingConfig;
 use crate::error::{MemoryError, Result};
 use ort::session::Session;
 use ort::value::TensorRef;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
 
-const MODEL_URL: &str =
-    "https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx/resolve/main/model.onnx";
-const TOKENIZER_URL: &str =
-    "https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx/resolve/main/tokenizer.json";
-const CACHE_SUBDIR: &str = "total-recall";
-const MODEL_FILENAME: &str = "all-MiniLM-L6-v2.onnx";
-const TOKENIZER_FILENAME: &str = "all-MiniLM-L6-v2-tokenizer.json";
-const EMBEDDING_DIM: usize = 384;
-const MAX_SEQ_LEN: usize = 128;
+const LOCAL_MODEL_MAX_SEQ_LEN: usize = 512;
 
-/// Real sentence embedding using all-MiniLM-L6-v2 (ONNX).
-///
-/// Session is guarded by Mutex so Embedder can be used behind Arc<Embedder> with &self methods.
+struct ResolvedEmbeddingModel {
+    label: String,
+    model_path: PathBuf,
+    tokenizer_path: PathBuf,
+    dimension: usize,
+    max_seq_len: usize,
+    use_token_type_ids: bool,
+}
+
+/// Sentence embedding using the configured ONNX model and tokenizer.
 pub struct Embedder {
     // Mutex because Session::run requires &mut self
     session: Mutex<Session>,
     tokenizer: Tokenizer,
+    dimension: usize,
+    use_token_type_ids: bool,
 }
 
 impl Embedder {
     pub fn new() -> Result<Self> {
-        let cache_dir = Self::cache_dir()?;
-        std::fs::create_dir_all(&cache_dir)?;
+        Self::from_config(&EmbeddingConfig::default())
+    }
 
-        let model_path = cache_dir.join(MODEL_FILENAME);
-        let tokenizer_path = cache_dir.join(TOKENIZER_FILENAME);
-
-        if !model_path.exists() {
-            tracing::info!("Downloading all-MiniLM-L6-v2 ONNX model to {:?}", model_path);
-            Self::download_file(MODEL_URL, &model_path)?;
-        }
-
-        if !tokenizer_path.exists() {
-            tracing::info!(
-                "Downloading all-MiniLM-L6-v2 tokenizer to {:?}",
-                tokenizer_path
-            );
-            Self::download_file(TOKENIZER_URL, &tokenizer_path)?;
-        }
-
-        tracing::info!("Loading ONNX session from {:?}", model_path);
+    pub fn from_config(config: &EmbeddingConfig) -> Result<Self> {
+        let resolved = Self::resolve_model(config)?;
+        tracing::info!(
+            model = %resolved.label,
+            model_path = %resolved.model_path.display(),
+            tokenizer_path = %resolved.tokenizer_path.display(),
+            dimension = resolved.dimension,
+            "Loading embedding model"
+        );
         let session = Session::builder()
             .map_err(|e| MemoryError::Embedding(format!("ORT session builder: {e}")))?
-            .commit_from_file(&model_path)
+            .commit_from_file(&resolved.model_path)
             .map_err(|e| MemoryError::Embedding(format!("Load ONNX model: {e}")))?;
 
-        tracing::info!("Loading tokenizer from {:?}", tokenizer_path);
-        let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
+        let mut tokenizer = Tokenizer::from_file(&resolved.tokenizer_path)
             .map_err(|e| MemoryError::Embedding(format!("Load tokenizer: {e}")))?;
 
         tokenizer
             .with_truncation(Some(tokenizers::TruncationParams {
-                max_length: MAX_SEQ_LEN,
+                max_length: resolved.max_seq_len,
                 strategy: tokenizers::TruncationStrategy::LongestFirst,
                 stride: 0,
                 direction: tokenizers::TruncationDirection::Right,
             }))
             .map_err(|e| MemoryError::Embedding(format!("Tokenizer truncation: {e}")))?;
 
-        tokenizer.with_padding(Some(tokenizers::PaddingParams {
-            strategy: tokenizers::PaddingStrategy::BatchLongest,
-            direction: tokenizers::PaddingDirection::Right,
-            pad_to_multiple_of: None,
-            pad_id: 0,
-            pad_type_id: 0,
-            pad_token: String::from("[PAD]"),
-        }));
+        if tokenizer.get_padding().is_none() {
+            tokenizer.with_padding(Some(tokenizers::PaddingParams {
+                strategy: tokenizers::PaddingStrategy::BatchLongest,
+                direction: tokenizers::PaddingDirection::Right,
+                pad_to_multiple_of: None,
+                pad_id: 0,
+                pad_type_id: 0,
+                pad_token: String::from("[PAD]"),
+            }));
+        }
 
         tracing::info!(
-            "Embedder initialized: all-MiniLM-L6-v2 ONNX ({}d)",
-            EMBEDDING_DIM
+            model = %resolved.label,
+            dimension = resolved.dimension,
+            token_type_ids = resolved.use_token_type_ids,
+            "Embedder initialized"
         );
         Ok(Self {
             session: Mutex::new(session),
             tokenizer,
+            dimension: resolved.dimension,
+            use_token_type_ids: resolved.use_token_type_ids,
         })
     }
 
-    /// Embed a single piece of text into a 384-dim L2-normalized vector.
+    pub fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    /// Embed a single piece of text into a configured-dimensional L2-normalized vector.
     pub fn embed(&self, text: &str) -> Vec<f32> {
         self.embed_batch(&[text])
             .into_iter()
             .next()
-            .unwrap_or_else(|| vec![0.0f32; EMBEDDING_DIM])
+            .unwrap_or_else(|| vec![0.0f32; self.dimension])
     }
 
-    /// Embed a batch of texts, returning one 384-dim L2-normalized vector per input.
+    /// Embed a batch of texts, returning one configured-dimensional vector per input.
     pub fn embed_batch(&self, texts: &[&str]) -> Vec<Vec<f32>> {
         match self.embed_batch_inner(texts) {
             Ok(embeddings) => embeddings,
             Err(e) => {
                 tracing::error!("Embedding failed: {e}; returning zero vectors");
-                texts
-                    .iter()
-                    .map(|_| vec![0.0f32; EMBEDDING_DIM])
-                    .collect()
+                texts.iter().map(|_| vec![0.0f32; self.dimension]).collect()
             }
         }
     }
@@ -142,27 +142,46 @@ impl Embedder {
 
         // Use `([usize; 2], &[T])` tuple form — avoids ndarray version mismatch with ort
         let shape = [batch_size, seq_len];
-        let input_ids_tensor = TensorRef::<i64>::from_array_view((shape, input_ids.as_slice()))?;
-        let attn_mask_tensor =
-            TensorRef::<i64>::from_array_view((shape, attention_mask.as_slice()))?;
-        let type_ids_tensor =
-            TensorRef::<i64>::from_array_view((shape, token_type_ids.as_slice()))?;
-
         // Run ONNX inference (lock mutex for exclusive mutable access to session)
         let mut session_guard = self
             .session
             .lock()
             .map_err(|e| format!("Session lock poisoned: {e}"))?;
-        let outputs = session_guard.run(ort::inputs![
-            "input_ids" => input_ids_tensor,
-            "attention_mask" => attn_mask_tensor,
-            "token_type_ids" => type_ids_tensor
-        ])?;
+        let outputs = if self.use_token_type_ids {
+            let input_ids_tensor =
+                TensorRef::<i64>::from_array_view((shape, input_ids.as_slice()))?;
+            let attn_mask_tensor =
+                TensorRef::<i64>::from_array_view((shape, attention_mask.as_slice()))?;
+            let type_ids_tensor =
+                TensorRef::<i64>::from_array_view((shape, token_type_ids.as_slice()))?;
+            session_guard.run(ort::inputs![
+                "input_ids" => input_ids_tensor,
+                "attention_mask" => attn_mask_tensor,
+                "token_type_ids" => type_ids_tensor
+            ])?
+        } else {
+            let input_ids_tensor =
+                TensorRef::<i64>::from_array_view((shape, input_ids.as_slice()))?;
+            let attn_mask_tensor =
+                TensorRef::<i64>::from_array_view((shape, attention_mask.as_slice()))?;
+            session_guard.run(ort::inputs![
+                "input_ids" => input_ids_tensor,
+                "attention_mask" => attn_mask_tensor
+            ])?
+        };
 
         // Output[0] = last_hidden_state: [batch, seq_len, hidden_size]
         let output_tensor = outputs[0].try_extract_array::<f32>()?;
         let flat: Vec<f32> = output_tensor.iter().copied().collect();
         let hidden_size = flat.len() / (batch_size * seq_len);
+
+        if hidden_size != self.dimension {
+            return Err(format!(
+                "configured embedding dimension {} does not match model output dimension {}",
+                self.dimension, hidden_size
+            )
+            .into());
+        }
 
         // Mean-pool with attention mask, then L2 normalize
         let mut result = Vec::with_capacity(batch_size);
@@ -214,51 +233,66 @@ impl Embedder {
         dot / (norm_a * norm_b)
     }
 
-    fn cache_dir() -> Result<PathBuf> {
-        // Prefer TR_MODEL_CACHE_DIR env var (set from config.embedding.cache_dir)
-        if let Ok(dir) = std::env::var("TR_MODEL_CACHE_DIR") {
-            let p = PathBuf::from(dir);
-            if !p.as_os_str().is_empty() {
-                return Ok(p);
-            }
+    fn resolve_model(config: &EmbeddingConfig) -> Result<ResolvedEmbeddingModel> {
+        let model_name = config.model.trim();
+        if model_name.is_empty() {
+            return Err(MemoryError::Embedding(
+                "embedding.model must name the configured embedding model".to_string(),
+            ));
         }
-        let base = dirs::cache_dir().ok_or_else(|| {
-            MemoryError::Embedding("Could not determine cache directory".to_string())
-        })?;
-        Ok(base.join(CACHE_SUBDIR))
+
+        let requested_path = config.model_path.clone();
+
+        if requested_path.exists() {
+            return Self::resolve_local_model(config, requested_path);
+        }
+
+        Err(MemoryError::Embedding(format!(
+            "embedding.model_path must point at a local model directory for {}; got {}",
+            config.model,
+            requested_path.display()
+        )))
     }
 
-    fn download_file(url: &str, dest: &Path) -> Result<()> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(300))
-            .build()
-            .map_err(|e| MemoryError::Embedding(format!("Build HTTP client: {e}")))?;
+    fn resolve_local_model(
+        config: &EmbeddingConfig,
+        model_path: PathBuf,
+    ) -> Result<ResolvedEmbeddingModel> {
+        let (model_path, tokenizer_path) = if model_path.is_dir() {
+            (
+                model_path.join("model.onnx"),
+                model_path.join("tokenizer.json"),
+            )
+        } else {
+            (model_path, config.cache_dir.join("tokenizer.json"))
+        };
 
-        let response = client
-            .get(url)
-            .send()
-            .map_err(|e| MemoryError::Embedding(format!("Download {url}: {e}")))?;
-
-        if !response.status().is_success() {
+        if !model_path.exists() {
             return Err(MemoryError::Embedding(format!(
-                "HTTP {} downloading {url}",
-                response.status()
+                "configured ONNX model not found at {}",
+                model_path.display()
             )));
         }
+        if !tokenizer_path.exists() {
+            return Err(MemoryError::Embedding(format!(
+                "configured tokenizer not found at {}",
+                tokenizer_path.display()
+            )));
+        }
+        if config.dimension == 0 {
+            return Err(MemoryError::Embedding(
+                "embedding.dimension must be greater than zero".to_string(),
+            ));
+        }
 
-        let bytes = response
-            .bytes()
-            .map_err(|e| MemoryError::Embedding(format!("Read response body: {e}")))?;
-
-        // Atomic write: temp file → rename
-        let tmp_path = dest.with_extension("tmp");
-        std::fs::write(&tmp_path, &bytes)
-            .map_err(|e| MemoryError::Embedding(format!("Write temp file: {e}")))?;
-        std::fs::rename(&tmp_path, dest)
-            .map_err(|e| MemoryError::Embedding(format!("Rename temp file: {e}")))?;
-
-        tracing::info!("Downloaded {} bytes from {}", bytes.len(), url);
-        Ok(())
+        Ok(ResolvedEmbeddingModel {
+            label: config.model.clone(),
+            model_path,
+            tokenizer_path,
+            dimension: config.dimension,
+            max_seq_len: LOCAL_MODEL_MAX_SEQ_LEN,
+            use_token_type_ids: false,
+        })
     }
 }
 
@@ -276,9 +310,12 @@ mod tests {
     fn test_embed_dim() {
         let embedder = Embedder::new().expect("init");
         let v = embedder.embed("hello world");
-        assert_eq!(v.len(), 384, "embedding should be 384-dimensional");
+        assert_eq!(v.len(), 1024, "embedding should be 1024-dimensional");
         let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 1e-4, "embedding should be L2-normalized, norm={norm}");
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "embedding should be L2-normalized, norm={norm}"
+        );
     }
 
     #[test]
@@ -300,7 +337,6 @@ mod tests {
     /// Verify that embed() is deterministic: same input must produce identical output.
     #[test]
     fn test_embed_determinism() {
-        // Safe: Embedder::new() is expected to succeed when model is cached
         let embedder = Embedder::new().expect("init");
         let text = "the quick brown fox jumps over the lazy dog";
         let v1 = embedder.embed(text);
@@ -317,7 +353,6 @@ mod tests {
     /// Verify that embed_batch returns embeddings in the same order as the input.
     #[test]
     fn test_embed_batch_order() {
-        // Safe: Embedder::new() expected to succeed with cached model
         let embedder = Embedder::new().expect("init");
         let texts = ["apple", "banana", "cherry"];
         let batch = embedder.embed_batch(&texts);
@@ -336,7 +371,6 @@ mod tests {
     /// Cosine similarity of a vector with itself must be 1.0 (within float tolerance).
     #[test]
     fn test_cosine_similarity_self() {
-        // Safe: Embedder::new() expected to succeed with cached model
         let embedder = Embedder::new().expect("init");
         let v = embedder.embed("self-similarity test");
         let sim = embedder.cosine_similarity(&v, &v);
@@ -354,6 +388,9 @@ mod tests {
         let a = vec![1.0f32, 0.0, 0.0];
         let b = vec![0.0f32, 1.0, 0.0];
         let sim = embedder.cosine_similarity(&a, &b);
-        assert!((sim - 0.0).abs() < 1e-6, "orthogonal vectors should have sim=0, got {sim}");
+        assert!(
+            (sim - 0.0).abs() < 1e-6,
+            "orthogonal vectors should have sim=0, got {sim}"
+        );
     }
 }

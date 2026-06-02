@@ -42,13 +42,19 @@ fn test_write_read_search_flow() {
         .create_note("2026-03-09", note_content())
         .expect("create_note should succeed");
 
-    assert_eq!(created.date, "2026-03-09", "created note should have correct date");
+    assert_eq!(
+        created.date, "2026-03-09",
+        "created note should have correct date"
+    );
     assert_eq!(
         created.metadata.title,
         Some("Integration Test Note".to_string()),
         "title should be parsed from frontmatter"
     );
-    assert!(!created.archived, "newly created note should not be archived");
+    assert!(
+        !created.archived,
+        "newly created note should not be archived"
+    );
 
     // ── 2. Read (get_recent_notes) ───────────────────────────────────────────
     // days=1: note was just created with Utc::now() timestamp, so it's within the window.
@@ -72,19 +78,28 @@ fn test_write_read_search_flow() {
         .read_note("2026-03-09")
         .expect("read_note should succeed for an existing note");
 
-    assert_eq!(note.content, note_content(), "content should be stored verbatim");
+    assert_eq!(
+        note.content,
+        note_content(),
+        "content should be stored verbatim"
+    );
     assert!(
         !note.observations.is_empty(),
         "note should have at least one parsed observation"
     );
 
     // Verify at least one observation category is parsed
-    let has_task = note.observations.iter().any(|o| o.category.as_deref() == Some("task"));
-    assert!(has_task, "at least one observation should have category 'task'");
+    let has_task = note
+        .observations
+        .iter()
+        .any(|o| o.category.as_deref() == Some("task"));
+    assert!(
+        has_task,
+        "at least one observation should have category 'task'"
+    );
 
     // ── 4. Search ────────────────────────────────────────────────────────────
-    // Safe: Embedder::new() downloads to cache dir; assumed cached from unit tests.
-    let embedder = Embedder::new().expect("embedder init should succeed with cached model");
+    let embedder = Embedder::new().expect("embedder init should succeed with configured model");
 
     // Query text is semantically related to the note content.
     let query_vec = embedder.embed("rust testing integration tests");
@@ -141,7 +156,9 @@ fn test_archive_restore_affects_search() {
 
     // Archive it.
     // Safe: note exists; archive_note only fails on DB errors.
-    store.archive_note("2026-03-10").expect("archive should succeed");
+    store
+        .archive_note("2026-03-10")
+        .expect("archive should succeed");
 
     // After archive: should NOT appear in non-archived search.
     // Safe: same query, include_archived=false.
@@ -155,7 +172,9 @@ fn test_archive_restore_affects_search() {
 
     // Restore it.
     // Safe: note exists and is archived.
-    store.restore_note("2026-03-10").expect("restore should succeed");
+    store
+        .restore_note("2026-03-10")
+        .expect("restore should succeed");
 
     // After restore: should be searchable again.
     // Safe: same as above.
@@ -174,7 +193,8 @@ fn test_archive_restore_affects_search() {
 fn test_multiple_notes_semantic_ranking() {
     let (_dir, store) = make_store();
 
-    let rust_note = "---\ntitle: Rust Note\n---\n## 10:00\n- [note] Rust ownership and borrowing #rust\n";
+    let rust_note =
+        "---\ntitle: Rust Note\n---\n## 10:00\n- [note] Rust ownership and borrowing #rust\n";
     let cooking_note =
         "---\ntitle: Cooking Note\n---\n## 10:00\n- [note] Bake a sourdough loaf #cooking\n";
 

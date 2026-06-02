@@ -1,12 +1,13 @@
+use crate::config::EmbeddingConfig;
 use crate::error::{MemoryError, Result};
 use crate::memory::embedder::Embedder;
 use crate::memory::models::{Note, NoteMetadata, Observation};
 use chrono::Utc;
-use std::sync::Once;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Once;
 
 /// Register sqlite-vec extension for all new SQLite connections (once per process).
 static SQLITE_VEC_LOADED: Once = Once::new();
@@ -43,6 +44,13 @@ pub struct EmbeddingRow {
 
 impl MemoryStore {
     pub fn new(db_path: &Path) -> Result<Self> {
+        Self::new_with_embedding_config(db_path, &EmbeddingConfig::default())
+    }
+
+    pub fn new_with_embedding_config(
+        db_path: &Path,
+        embedding_config: &EmbeddingConfig,
+    ) -> Result<Self> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -63,6 +71,8 @@ impl MemoryStore {
 
         // Initialize write counter for periodic WAL checkpointing
         let write_count = std::sync::atomic::AtomicUsize::new(0);
+        let embedder = Embedder::from_config(embedding_config)?;
+        let embedding_dimension = embedder.dimension();
 
         // Migrate: drop old vss-based virtual table if present (incompatible schema)
         let is_vss: bool = conn
@@ -108,12 +118,6 @@ impl MemoryStore {
                 tags TEXT
             );
 
-            -- Vector index table using sqlite-vec (vec0 virtual table)
-            -- rowid matches observations.rowid for joining
-            CREATE VIRTUAL TABLE IF NOT EXISTS vec_observations USING vec0(
-                embedding float[384]
-            );
-
             CREATE INDEX IF NOT EXISTS idx_observations_note_id ON observations(note_id);
             CREATE INDEX IF NOT EXISTS idx_observations_category ON observations(category);
             CREATE INDEX IF NOT EXISTS idx_notes_date ON notes(date DESC);
@@ -121,13 +125,99 @@ impl MemoryStore {
             ",
         )?;
 
-        tracing::info!("MemoryStore initialized with sqlite-vec vector search");
+        if Self::ensure_vector_table(&conn, embedding_dimension)? {
+            Self::reindex_observations(&conn, &embedder)?;
+        }
+
+        tracing::info!(
+            dimension = embedding_dimension,
+            "MemoryStore initialized with sqlite-vec vector search"
+        );
 
         Ok(Self {
             connection: Arc::new(Mutex::new(conn)),
-            embedder: Embedder::new()?,
-            write_count: write_count,
+            embedder,
+            write_count,
         })
+    }
+
+    fn ensure_vector_table(conn: &Connection, dimension: usize) -> Result<bool> {
+        if dimension == 0 {
+            return Err(MemoryError::Embedding(
+                "embedding dimension must be greater than zero".to_string(),
+            ));
+        }
+
+        let expected = format!("float[{dimension}]");
+        let existing_sql: Option<String> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_observations'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let mut recreated = false;
+        if let Some(sql) = existing_sql {
+            if !sql.replace(' ', "").contains(&expected) {
+                tracing::warn!(
+                    expected_dimension = dimension,
+                    existing_sql = %sql,
+                    "Recreating sqlite-vec table because embedding dimension changed"
+                );
+                conn.execute_batch("DROP TABLE IF EXISTS vec_observations;")?;
+                recreated = true;
+            }
+        } else {
+            recreated = true;
+        }
+
+        conn.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_observations USING vec0(embedding float[{dimension}]);"
+        ))?;
+
+        Ok(recreated)
+    }
+
+    fn reindex_observations(conn: &Connection, embedder: &Embedder) -> Result<()> {
+        let rows = {
+            let mut stmt =
+                conn.prepare("SELECT rowid, content FROM observations ORDER BY rowid")?;
+            let mapped = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            mapped.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        tracing::info!(
+            count = rows.len(),
+            "Reindexing observations for embedding model"
+        );
+        for (rowid, content) in rows {
+            let embedding = embedder.embed(&content);
+            let embedding_json = Self::embedding_json(&embedding);
+            conn.execute(
+                "INSERT OR REPLACE INTO vec_observations(rowid, embedding) VALUES (?1, vec_f32(?2))",
+                params![rowid, embedding_json],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn embedding_json(embedding: &[f32]) -> String {
+        format!(
+            "[{}]",
+            embedding
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
     }
 
     pub fn parse_and_insert_observations(
@@ -165,14 +255,7 @@ impl MemoryStore {
 
             // Compute and store embedding in vec_observations
             let embedding = self.embedder.embed(&obs.content);
-            let embedding_json = format!(
-                "[{}]",
-                embedding
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
+            let embedding_json = Self::embedding_json(&embedding);
 
             conn.execute(
                 "INSERT INTO vec_observations(rowid, embedding) VALUES (?1, vec_f32(?2))",
@@ -248,14 +331,7 @@ impl MemoryStore {
 
         // Compute and store embedding
         let embedding = self.embedder.embed(text);
-        let embedding_json = format!(
-            "[{}]",
-            embedding
-                .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
+        let embedding_json = Self::embedding_json(&embedding);
 
         self.connection.lock().unwrap().execute(
             "INSERT INTO vec_observations(rowid, embedding) VALUES (?1, vec_f32(?2))",
@@ -270,9 +346,14 @@ impl MemoryStore {
     /// Plain text content is also indexed as a vector-searchable observation.
     pub fn append_note(&self, date: &str, content: &str) -> Result<Note> {
         // Increment write counter and checkpoint every 100 writes
-        self.write_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.write_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if self.write_count.load(std::sync::atomic::Ordering::Relaxed) % 100 == 0 {
-            let _ = self.connection.lock().unwrap().execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+            let _ = self
+                .connection
+                .lock()
+                .unwrap()
+                .execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
         }
 
         let exists: i64 = self.connection.lock().unwrap().query_row(
@@ -299,7 +380,11 @@ impl MemoryStore {
         // Note exists — append content
         let existing = self.read_note(date)?;
         let now = Utc::now().timestamp();
-        let separator = if existing.content.ends_with('\n') { "" } else { "\n" };
+        let separator = if existing.content.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
         let new_content = format!("{}{}\n{}", existing.content, separator, content);
 
         self.connection.lock().unwrap().execute(
@@ -469,14 +554,7 @@ impl MemoryStore {
         limit: usize,
         include_archived: bool,
     ) -> Result<Vec<Note>> {
-        let embedding_json = format!(
-            "[{}]",
-            query_embedding
-                .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
+        let embedding_json = Self::embedding_json(query_embedding);
 
         // sqlite-vec KNN search: vec0 virtual tables require the LIMIT to be pushed down
         // directly onto the KNN subquery (CTE) — a bare JOIN with outer LIMIT is not enough.
@@ -641,7 +719,10 @@ mod tests {
         // Safe: note exists; archive should succeed.
         store.archive_note("2026-03-09").unwrap();
         let note = store.read_note("2026-03-09").unwrap();
-        assert!(note.archived, "note should be archived after archive_note()");
+        assert!(
+            note.archived,
+            "note should be archived after archive_note()"
+        );
     }
 
     #[test]
@@ -652,7 +733,10 @@ mod tests {
         store.archive_note("2026-03-09").unwrap();
         store.restore_note("2026-03-09").unwrap();
         let note = store.read_note("2026-03-09").unwrap();
-        assert!(!note.archived, "note should not be archived after restore_note()");
+        assert!(
+            !note.archived,
+            "note should not be archived after restore_note()"
+        );
     }
 
     // --- get_recent_notes tests ---
@@ -711,7 +795,6 @@ mod tests {
     fn test_search_notes_returns_relevant() {
         let (_dir, store) = make_store();
         store.create_note("2026-03-09", sample_content()).unwrap();
-        // Safe: Embedder::new() succeeds (model cached); embed is deterministic.
         let embedder = Embedder::new().unwrap();
         let query_vec = embedder.embed("shopping task milk");
         // Safe: limit=5, non-archived search.
@@ -729,11 +812,13 @@ mod tests {
     #[test]
     fn test_search_notes_empty_store() {
         let (_dir, store) = make_store();
-        // Safe: Embedder::new() succeeds with cached model.
         let embedder = Embedder::new().unwrap();
         let query_vec = embedder.embed("anything");
         // Safe: no notes inserted; result should be empty, not an error.
         let notes = store.search_notes(&query_vec, 5, false).unwrap();
-        assert!(notes.is_empty(), "search on empty store should return empty vec");
+        assert!(
+            notes.is_empty(),
+            "search on empty store should return empty vec"
+        );
     }
 }

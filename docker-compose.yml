@@ -28,7 +28,6 @@ services:
       - "${TR_PORT:-8811}:${TR_PORT:-8811}"
     volumes:
       - ${TR_MEMORY_DIR:-~/.total-recall/memory}:/data/memory
-      - ${TR_MODEL_CACHE_DIR:-~/.total-recall/models}:/data/models
+      - ${TR_MODEL_PATH:-/data/models/embed}:/data/models/embed:ro
     environment:
       - TR_MEMORY_DIR=/data/memory
-      - TR_MODEL_CACHE_DIR=/data/models

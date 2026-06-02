@@ -18,9 +18,10 @@ logging:
 
 # Embedding model settings
 embedding:
-  model: sentence-transformers/all-MiniLM-L6-v2
-  dimension: 384
-  cache_dir: ~/.total-recall/models
+  model: Snowflake/snowflake-arctic-embed-l-v2.0
+  model_path: /data/models/embed
+  dimension: 1024
+  cache_dir: /data/models/embed
 
 # Search settings
 search:

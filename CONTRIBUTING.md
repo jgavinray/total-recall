@@ -51,7 +51,7 @@ cargo build
 cargo build --release
 ```
 
-The first build will download the ONNX embedding model (`all-MiniLM-L6-v2`) to your cache directory. This is a one-time operation.
+The embedding model is the configured Snowflake ONNX model under `embedding.model_path`.
 
 ### Verify Installation
 
@@ -518,7 +518,7 @@ Error downloading model: connection timed out
 **Fix:**
 - Check your internet connection
 - The model is cached after first download at `~/.cache/total-recall/`
-- Manual download: Fetch `all-MiniLM-L6-v2.onnx` from HuggingFace and place in cache dir
+- Manual setup: place the Snowflake ONNX model and tokenizer under `embedding.model_path`
 
 #### SQLite Pragma Warnings
 
