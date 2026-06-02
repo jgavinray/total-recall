@@ -167,13 +167,13 @@ async fn run_mcp_server(
             let ct = tokio_util::sync::CancellationToken::new();
             let ct_clone = ct.clone();
 
+            let mut config = StreamableHttpServerConfig::default();
+            config.cancellation_token = ct.child_token();
+
             let service = StreamableHttpService::new(
                 move || Ok(server.clone()),
                 LocalSessionManager::default().into(),
-                StreamableHttpServerConfig {
-                    cancellation_token: ct.child_token(),
-                    ..Default::default()
-                },
+                config,
             );
 
             let router = axum::Router::new().nest_service("/mcp", service);
