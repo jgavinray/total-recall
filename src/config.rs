@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub const DEFAULT_EMBEDDING_MODEL: &str = "Snowflake/snowflake-arctic-embed-l-v2.0";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Directory containing all memory files (organized by mm-yyyy/ subdirectories)
@@ -95,7 +97,7 @@ fn default_backup_count() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
-    #[serde(default)]
+    #[serde(default = "default_model")]
     pub model: String,
 
     #[serde(default = "default_model_path")]
@@ -120,7 +122,7 @@ impl Default for EmbeddingConfig {
 }
 
 fn default_model() -> String {
-    "Snowflake/snowflake-arctic-embed-l-v2.0".to_string()
+    DEFAULT_EMBEDDING_MODEL.to_string()
 }
 
 fn default_model_path() -> PathBuf {
@@ -203,8 +205,7 @@ impl Config {
     /// Load configuration from file
     pub fn load(path: &Path) -> Result<Self, anyhow::Error> {
         if !path.exists() {
-            tracing::info!("Config file not found at {:?}, using defaults", path);
-            return Ok(Self::default());
+            anyhow::bail!("required config file not found at {}", path.display());
         }
 
         let content = std::fs::read_to_string(path)?;
@@ -223,11 +224,45 @@ impl Config {
             std::env::current_dir()?.join(&config.db_path)
         };
 
-        Ok(Self {
+        let model_path = if config.embedding.model_path.is_absolute() {
+            config.embedding.model_path.clone()
+        } else {
+            std::env::current_dir()?.join(&config.embedding.model_path)
+        };
+
+        let cache_dir = if config.embedding.cache_dir.is_absolute() {
+            config.embedding.cache_dir.clone()
+        } else {
+            std::env::current_dir()?.join(&config.embedding.cache_dir)
+        };
+
+        let embedding = EmbeddingConfig {
+            model_path,
+            cache_dir,
+            ..config.embedding
+        };
+
+        let loaded = Self {
             memory_dir,
             db_path,
+            embedding,
             ..config
-        })
+        };
+        loaded.validate()?;
+        Ok(loaded)
+    }
+
+    pub fn validate(&self) -> Result<(), anyhow::Error> {
+        if self.embedding.model.trim().is_empty() {
+            anyhow::bail!("embedding.model must be configured");
+        }
+        if self.embedding.dimension == 0 {
+            anyhow::bail!("embedding.dimension must be greater than zero");
+        }
+        if self.embedding.model_path.as_os_str().is_empty() {
+            anyhow::bail!("embedding.model_path must be explicitly configured");
+        }
+        Ok(())
     }
 
     /// Save configuration to file

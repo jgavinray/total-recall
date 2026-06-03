@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use total_recall::{config, error, mcp, memory};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -86,13 +87,8 @@ async fn main() -> anyhow::Result<()> {
             .join("config.yaml")
     });
 
-    let config = match config::Config::load(&config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to load config: {}", e);
-            config::Config::default()
-        }
-    };
+    let config = config::Config::load(&config_path)
+        .map_err(|e| anyhow::anyhow!("failed to load required config {:?}: {}", config_path, e))?;
 
     tracing_subscriber::registry()
         .with(
@@ -167,10 +163,12 @@ async fn run_mcp_server(
                 e
             )
         })?;
+    let shared_store = std::sync::Arc::new(tokio::sync::RwLock::new(store));
+    let api_state = MemoryApiState {
+        store: shared_store.clone(),
+    };
 
-    let server =
-        mcp::server::MemoryMcpServer::new(store, config.memory_dir.clone(), &config.embedding)
-            .map_err(|e| anyhow::anyhow!("Failed to create server: {}", e))?;
+    let server = mcp::server::MemoryMcpServer::from_shared(shared_store);
 
     match transport {
         "http" => {
@@ -194,9 +192,16 @@ async fn run_mcp_server(
                 config,
             );
 
-            let router = axum::Router::new().nest_service("/mcp", service);
+            let router = axum::Router::new()
+                .route("/api/recent", axum::routing::get(api_recent_notes))
+                .route("/api/search", axum::routing::post(api_search_notes))
+                .nest_service("/mcp", service)
+                .with_state(api_state);
             let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-            tracing::info!("total-recall HTTP MCP server listening on {}", bind_addr);
+            tracing::info!(
+                "total-recall HTTP MCP/API server listening on {}",
+                bind_addr
+            );
 
             axum::serve(listener, router)
                 .with_graceful_shutdown(async move {
@@ -216,6 +221,103 @@ async fn run_mcp_server(
     }
 
     Ok(())
+}
+
+#[derive(Clone)]
+struct MemoryApiState {
+    store: std::sync::Arc<tokio::sync::RwLock<memory::store::MemoryStore>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecentNotesQuery {
+    days: Option<usize>,
+    limit: Option<usize>,
+    include_archived: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchNotesRequest {
+    query: String,
+    limit: Option<usize>,
+    include_archived: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct NotesResponse {
+    notes: Vec<MemoryNoteResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryNoteResponse {
+    id: String,
+    date: String,
+    title: Option<String>,
+    content: String,
+    updated_at: i64,
+    archived: bool,
+}
+
+async fn api_recent_notes(
+    axum::extract::State(state): axum::extract::State<MemoryApiState>,
+    axum::extract::Query(query): axum::extract::Query<RecentNotesQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let limit = query.limit.unwrap_or(10).clamp(1, 100);
+    let days = query.days.unwrap_or(7).clamp(1, 3650);
+    let include_archived = query.include_archived.unwrap_or(false);
+    let store = state.store.read().await;
+    match store.get_recent_notes(limit, days, include_archived) {
+        Ok(notes) => axum::Json(NotesResponse {
+            notes: notes.into_iter().map(MemoryNoteResponse::from).collect(),
+        })
+        .into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({
+                "error": "recent_notes_failed",
+                "detail": e.to_string()
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_search_notes(
+    axum::extract::State(state): axum::extract::State<MemoryApiState>,
+    axum::Json(request): axum::Json<SearchNotesRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let limit = request.limit.unwrap_or(10).clamp(1, 100);
+    let include_archived = request.include_archived.unwrap_or(false);
+    let store = state.store.read().await;
+    let embedding = store.embed_query(&request.query);
+    match store.search_notes(&embedding, limit, include_archived) {
+        Ok(notes) => axum::Json(NotesResponse {
+            notes: notes.into_iter().map(MemoryNoteResponse::from).collect(),
+        })
+        .into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({
+                "error": "search_notes_failed",
+                "detail": e.to_string()
+            })),
+        )
+            .into_response(),
+    }
+}
+
+impl From<memory::models::Note> for MemoryNoteResponse {
+    fn from(note: memory::models::Note) -> Self {
+        Self {
+            id: note.id,
+            date: note.date,
+            title: note.metadata.title,
+            content: note.content,
+            updated_at: note.updated_at,
+            archived: note.archived,
+        }
+    }
 }
 
 async fn run_write(

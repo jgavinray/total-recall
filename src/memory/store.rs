@@ -341,6 +341,10 @@ impl MemoryStore {
         Ok(())
     }
 
+    pub fn embed_query(&self, query: &str) -> Vec<f32> {
+        self.embedder.embed(query)
+    }
+
     /// Append content to an existing note, or create a new one if it doesn't exist.
     /// This is the idempotent write path used by tr_store — safe to call multiple times per day.
     /// Plain text content is also indexed as a vector-searchable observation.

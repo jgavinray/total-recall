@@ -1,5 +1,4 @@
 use crate::config::EmbeddingConfig;
-use crate::memory::embedder::Embedder;
 use crate::memory::store::MemoryStore;
 use rmcp::{
     ErrorData as McpError, ServerHandler, handler::server::wrapper::Parameters, model::*, schemars,
@@ -45,7 +44,6 @@ pub struct RecentNotesParams {
 #[derive(Clone)]
 pub struct MemoryMcpServer {
     store: Arc<RwLock<MemoryStore>>,
-    embedder: Arc<Embedder>,
     tool_router: rmcp::handler::server::router::tool::ToolRouter<MemoryMcpServer>,
 }
 
@@ -54,14 +52,16 @@ impl MemoryMcpServer {
     pub fn new(
         store: MemoryStore,
         _memory_dir: std::path::PathBuf,
-        embedding_config: &EmbeddingConfig,
+        _embedding_config: &EmbeddingConfig,
     ) -> std::result::Result<Self, crate::error::MemoryError> {
-        let embedder = Embedder::from_config(embedding_config)?;
-        Ok(Self {
-            store: Arc::new(RwLock::new(store)),
-            embedder: Arc::new(embedder),
+        Ok(Self::from_shared(Arc::new(RwLock::new(store))))
+    }
+
+    pub fn from_shared(store: Arc<RwLock<MemoryStore>>) -> Self {
+        Self {
+            store,
             tool_router: Self::tool_router(),
-        })
+        }
     }
 
     #[tool(description = "Create or append a new memory note for today's date")]
@@ -108,8 +108,8 @@ impl MemoryMcpServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let limit = params.limit.unwrap_or(10);
         let include_archived = params.include_archived.unwrap_or(false);
-        let query_embedding = self.embedder.embed(&params.query);
         let store = self.store.read().await;
+        let query_embedding = store.embed_query(&params.query);
         match store.search_notes(&query_embedding, limit, include_archived) {
             Ok(notes) => {
                 if notes.is_empty() {
