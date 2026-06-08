@@ -1,10 +1,26 @@
+use std::path::PathBuf;
 /// Integration tests for Total Recall: write → read → search flow.
 ///
 /// These tests exercise the full MemoryStore pipeline using real in-process SQLite
 /// (temp file) and the real ONNX embedder (model must be cached on disk).
 use tempfile::TempDir;
+use total_recall::config::EmbeddingConfig;
 use total_recall::memory::embedder::Embedder;
 use total_recall::memory::store::MemoryStore;
+
+fn test_embedding_config() -> EmbeddingConfig {
+    let model_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../models/embed");
+    EmbeddingConfig {
+        model_path: model_path.clone(),
+        cache_dir: model_path,
+        ..EmbeddingConfig::default()
+    }
+}
+
+fn make_embedder() -> Embedder {
+    Embedder::from_config(&test_embedding_config())
+        .expect("embedder init should succeed with configured model")
+}
 
 /// Helper: spin up a fresh store in a temp directory.
 /// Safe to unwrap: TempDir and MemoryStore::new only fail on OS errors (permissions, disk full),
@@ -12,7 +28,7 @@ use total_recall::memory::store::MemoryStore;
 fn make_store() -> (TempDir, MemoryStore) {
     let dir = TempDir::new().unwrap(); // safe: OS temp dir available
     let db_path = dir.path().join("integration-test.db");
-    let store = MemoryStore::new(&db_path).unwrap(); // safe: fresh path, no contention
+    let store = MemoryStore::new_with_embedding_config(&db_path, &test_embedding_config()).unwrap(); // safe: fresh path, no contention
     (dir, store)
 }
 
@@ -99,7 +115,7 @@ fn test_write_read_search_flow() {
     );
 
     // ── 4. Search ────────────────────────────────────────────────────────────
-    let embedder = Embedder::new().expect("embedder init should succeed with configured model");
+    let embedder = make_embedder();
 
     // Query text is semantically related to the note content.
     let query_vec = embedder.embed("rust testing integration tests");
@@ -141,7 +157,7 @@ fn test_archive_restore_affects_search() {
         .create_note("2026-03-10", note_content())
         .expect("create_note should succeed");
 
-    let embedder = Embedder::new().expect("embedder init");
+    let embedder = make_embedder();
     let query_vec = embedder.embed("rust testing");
 
     // Before archive: note should be searchable.
@@ -206,7 +222,7 @@ fn test_multiple_notes_semantic_ranking() {
         .create_note("2026-03-12", cooking_note)
         .expect("create cooking note");
 
-    let embedder = Embedder::new().expect("embedder init");
+    let embedder = make_embedder();
     let query_vec = embedder.embed("Rust programming language borrow checker");
 
     // Safe: limit 5, not archived.
