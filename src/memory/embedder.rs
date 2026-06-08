@@ -1,21 +1,12 @@
 use crate::config::EmbeddingConfig;
 use crate::error::{MemoryError, Result};
+use model_resolution::resolve_model;
 use ort::session::Session;
 use ort::value::TensorRef;
-use std::path::PathBuf;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
 
-const LOCAL_MODEL_MAX_SEQ_LEN: usize = 512;
-
-struct ResolvedEmbeddingModel {
-    label: String,
-    model_path: PathBuf,
-    tokenizer_path: PathBuf,
-    dimension: usize,
-    max_seq_len: usize,
-    use_token_type_ids: bool,
-}
+mod model_resolution;
 
 /// Sentence embedding using the configured ONNX model and tokenizer.
 pub struct Embedder {
@@ -32,7 +23,7 @@ impl Embedder {
     }
 
     pub fn from_config(config: &EmbeddingConfig) -> Result<Self> {
-        let resolved = Self::resolve_model(config)?;
+        let resolved = resolve_model(config)?;
         tracing::info!(
             model = %resolved.label,
             model_path = %resolved.model_path.display(),
@@ -231,68 +222,6 @@ impl Embedder {
             return 0.0;
         }
         dot / (norm_a * norm_b)
-    }
-
-    fn resolve_model(config: &EmbeddingConfig) -> Result<ResolvedEmbeddingModel> {
-        let model_name = config.model.trim();
-        if model_name.is_empty() {
-            return Err(MemoryError::Embedding(
-                "embedding.model must name the configured embedding model".to_string(),
-            ));
-        }
-
-        let requested_path = config.model_path.clone();
-
-        if requested_path.exists() {
-            return Self::resolve_local_model(config, requested_path);
-        }
-
-        Err(MemoryError::Embedding(format!(
-            "embedding.model_path must point at a local model directory for {}; got {}",
-            config.model,
-            requested_path.display()
-        )))
-    }
-
-    fn resolve_local_model(
-        config: &EmbeddingConfig,
-        model_path: PathBuf,
-    ) -> Result<ResolvedEmbeddingModel> {
-        let (model_path, tokenizer_path) = if model_path.is_dir() {
-            (
-                model_path.join("model.onnx"),
-                model_path.join("tokenizer.json"),
-            )
-        } else {
-            (model_path, config.cache_dir.join("tokenizer.json"))
-        };
-
-        if !model_path.exists() {
-            return Err(MemoryError::Embedding(format!(
-                "configured ONNX model not found at {}",
-                model_path.display()
-            )));
-        }
-        if !tokenizer_path.exists() {
-            return Err(MemoryError::Embedding(format!(
-                "configured tokenizer not found at {}",
-                tokenizer_path.display()
-            )));
-        }
-        if config.dimension == 0 {
-            return Err(MemoryError::Embedding(
-                "embedding.dimension must be greater than zero".to_string(),
-            ));
-        }
-
-        Ok(ResolvedEmbeddingModel {
-            label: config.model.clone(),
-            model_path,
-            tokenizer_path,
-            dimension: config.dimension,
-            max_seq_len: LOCAL_MODEL_MAX_SEQ_LEN,
-            use_token_type_ids: false,
-        })
     }
 }
 
