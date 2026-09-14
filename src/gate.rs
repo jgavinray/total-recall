@@ -12,8 +12,10 @@
 //! Pinned semantics (wave-2 contract):
 //! - `gate` refuses EVERY gated tool until `read_signoff` succeeded
 //!   this session. The refusal message is exactly
-//!   `handshake incomplete — call read_signoff first`, restating the
-//!   rule at the failure moment (spec §4).
+//!   `handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.`,
+//!   restating the rule at the failure moment (spec §4) — emitted identically
+//!   by EVERY gated tool (naive-client round: the private short variant in
+//!   signoff_append was cut over to this shared constant).
 //! - A refused attempt BEFORE the handshake increments
 //!   `server.attempted_write_before_handshake[session]` —
 //!   server-observable, so `session_compliance` can report it
@@ -40,9 +42,6 @@ use serde_json::{json, Value};
 
 use crate::rpc::Server;
 
-/// The exact pinned refusal text (wave-2 contract; the spec §4
-/// example frame carries it verbatim).
-pub const HANDSHAKE_REFUSAL: &str = "handshake incomplete — call read_signoff first";
 
 /// The full refusal message a gated tool reports: the pinned text,
 /// restating the rule at the failure moment (spec §4).

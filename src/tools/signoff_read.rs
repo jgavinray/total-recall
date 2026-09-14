@@ -52,6 +52,11 @@
 //! a loud `Err` and NO handshake (spec §3: the handshake is recorded
 //! when the call "returns successfully"), so the gate stays closed
 //! until the file is readable.
+//! The absent-file refusal is ACTIONABLE (naive-client study
+//! DEFECT-1): signoff.md is provisioned at the root by the deployment —
+//! this server never creates it — so a 'cannot read' failure is a
+//! provisioning error to report to the human, not a call-order problem
+//! to retry.
 
 use std::collections::HashMap;
 
@@ -66,7 +71,7 @@ use crate::rpc::{self, HandlerResult, Server, Tool};
 pub fn tools() -> Vec<Tool> {
     vec![Tool {
         name: "read_signoff".to_string(),
-        description: "MANDATORY FIRST CALL of every session. Returns the signoff.md warm-start block, the ranked 'if you read nothing else' list, and worker signoffs. RECORDS the session handshake: no mutating tool is accepted until this call returns successfully. Contract: first action of every session; no work before it returns.".to_string(),
+        description: "MANDATORY FIRST CALL of every session. No work before it returns: it gives you what the team knows NOW — the signoff.md warm-start block, the ranked 'if you read nothing else' list, and worker signoffs; for dated facts from the past use `recall` instead (this answers 'what matters right now', recall answers 'what was true when'). RECORDS the session handshake: no mutating tool and no claim_orchestrator is accepted until this call returns successfully. When a gated tool answers 'handshake incomplete — call read_signoff first', call this, then retry that tool once. A missing or unreadable signoff.md is an error and grants NO handshake — fix the file rather than retrying the call order.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {},
@@ -105,7 +110,7 @@ pub fn read_signoff(server: &mut Server, session: &str) -> HandlerResult {
         Ok(text) => text,
         Err(err) => {
             return HandlerResult::Err(format!(
-                "read_signoff failed: cannot read {path:?}: {err} — the session is NOT handshaken; no mutating tool is accepted until this call returns successfully"
+                "read_signoff failed: cannot read {path:?}: {err} — the session is NOT handshaken; no mutating tool is accepted until this call returns successfully — the root is not provisioned: signoff.md is provisioned at the root by the deployment and this server NEVER creates it. This is NOT a call-order problem and retrying this call cannot fix it — provision signoff.md at the root or report the missing file to the human"
             ));
         }
     };

@@ -118,11 +118,11 @@ pub fn handlers() -> HashMap<String, Handler> {
 fn claim_orchestrator_tool() -> Tool {
     Tool {
         name: "claim_orchestrator".to_string(),
-        description: "Claims orchestrator-ship for a date. The on-disk claim file .claims/orchestrator-<date> is the source of truth (§5): the server re-reads it on every call, never a memory map. Fresh claim: O_CREAT|O_EXCL, returns a token. Same session_id as the recorded holder: returns the EXISTING token (re-claim after server restart succeeds). Different session on a live claim: refused — an isError result naming the holder and reason. Gate for write_dayfile / write_brief / write_warm_start.".to_string(),
+        description: "Call this before the first orchestrator write of the day — write_dayfile / write_brief / write_warm_start all require the token it returns. Claims orchestrator-ship for a date; the on-disk claim file .claims/orchestrator-<date> is the source of truth (§5): the server re-reads it on every call, never a memory map. Fresh claim: O_CREAT|O_EXCL, returns a token. This call is itself handshake-gated: call read_signoff FIRST — a 'handshake incomplete — call read_signoff first' answer means call read_signoff, then retry this once. Session ids are server-generated per server process and never client-supplied, so a NEW server process is a NEW session and CANNOT re-claim — there is no re-claim path after a server restart. Different session on a live claim: refused — an isError result naming the holder and reason; if the refusal names another holder, do NOT poll or retry: report the named holder session to the human. Planting a claim file by hand is NOT a claim — the claim files are tool-written only.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "date": {"type": "string", "description": "YYYY-MM-DD; defaults to the server's LOCAL date (§2)"}
+                "date": {"type": "string", "description": "YYYY-MM-DD; defaults to the server's LOCAL date (§2) — omit to claim today"}
             },
             "additionalProperties": false
         }),
@@ -132,12 +132,12 @@ fn claim_orchestrator_tool() -> Tool {
 fn write_dayfile_tool() -> Tool {
     Tool {
         name: "write_dayfile".to_string(),
-        description: "Writes today's day file (YYYY-MM-DD.md, named by the server's LOCAL date, §2) — single-writer. REFUSES without today's valid orchestrator token ('write_dayfile refused: no valid orchestrator_<date> claim — single-writer dayfile'). Never call concurrently with another orchestrator.".to_string(),
+        description: "Use this — never a hand edit — to record the day: writes today's day file (YYYY-MM-DD.md, named by the server's LOCAL date, §2) as a SINGLE-WRITER whole-file replace. Pass `orchestrator_token` exactly as today's claim_orchestrator returned it. REFUSES without today's valid orchestrator token ('write_dayfile refused: no valid orchestrator_<date> claim — single-writer dayfile') — call claim_orchestrator once for the day first; if THAT refusal names another holder, stop and report to the human — repeat write_dayfile calls can never land while another session holds the claim; a 'handshake incomplete' refusal means call read_signoff then retry this once. The day files under the memory root are written ONLY through this tool: direct edits bypass the claim gate, the append lock and the audit trail. Never call concurrently with another orchestrator.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "content": {"type": "string", "description": "Full new day-file content (server replaces the file; no merge)"},
-                "orchestrator_token": {"type": "string", "description": "Token returned by claim_orchestrator for today"}
+                "orchestrator_token": {"type": "string", "description": "Token returned by claim_orchestrator for today — pass it verbatim; an absent or mismatched token is refused, there is no fallback"}
             },
             "required": ["content", "orchestrator_token"],
             "additionalProperties": false
@@ -433,7 +433,7 @@ pub fn claim_orchestrator(server: &mut Server, session: &str, args: &Value) -> H
             Some(a) if a >= STALE_AFTER => {
                 let _ = std::fs::remove_file(&path);
                 eprintln!(
-                    "[exomem-mcp] claim_orchestrator: .claims/orchestrator-{date} was orphaned (holder crashed before publishing) and is {a:?} old — taken over server-side"
+                    "[totalrecall] claim_orchestrator: .claims/orchestrator-{date} was orphaned (holder crashed before publishing) and is {a:?} old — taken over server-side"
                 );
                 let mut res = create_fresh_claim(&claims_dir, &path, session, &date);
                 // A takeover makes THIS session the holder: the
@@ -660,16 +660,16 @@ fn rotate_stale_claims(root: &Path, today: &str) {
             continue; // valid and current-or-future: stays
         }
         if let Err(e) = std::fs::create_dir_all(&archive_dir) {
-            eprintln!("[exomem-mcp] claim_orchestrator: cannot create .claims/archive/: {e} — stale claim {name} left in place");
+            eprintln!("[totalrecall] claim_orchestrator: cannot create .claims/archive/: {e} — stale claim {name} left in place");
             continue;
         }
         let target = archive_dir.join(&file_name);
         if target.exists() {
-            eprintln!("[exomem-mcp] claim_orchestrator: .claims/archive/{name} already exists — the stale claim is left in place (archives are never overwritten)");
+            eprintln!("[totalrecall] claim_orchestrator: .claims/archive/{name} already exists — the stale claim is left in place (archives are never overwritten)");
             continue;
         }
         if let Err(e) = std::fs::rename(&entry.path(), &target) {
-            eprintln!("[exomem-mcp] claim_orchestrator: could not rotate stale claim .claims/{name} to the archive: {e} — left in place");
+            eprintln!("[totalrecall] claim_orchestrator: could not rotate stale claim .claims/{name} to the archive: {e} — left in place");
         }
     }
 }
@@ -1083,12 +1083,12 @@ fn release_lock(root: &Path, token: &LockToken, lock_name: &str) {
     .all(|(name, want)| parse_lock_field(&content, name).map(|got| got == want).unwrap_or(false));
     if !ours {
         eprintln!(
-            "[exomem-mcp] write_dayfile: .locks/{lock_name} no longer records this acquisition — not removed (a successor's lock)"
+            "[totalrecall] write_dayfile: .locks/{lock_name} no longer records this acquisition — not removed (a successor's lock)"
         );
         return;
     }
     if let Err(e) = std::fs::remove_file(&path) {
-        eprintln!("[exomem-mcp] write_dayfile: could not release .locks/{lock_name}: {e} — it will be reclaimed once stale");
+        eprintln!("[totalrecall] write_dayfile: could not release .locks/{lock_name}: {e} — it will be reclaimed once stale");
     }
 }
 

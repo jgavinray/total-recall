@@ -1,13 +1,15 @@
 ---
-title: Exo Memory MCP Server — Spec
+title: Total Recall MCP Server — Spec
 type: spec
 status: v0.3 (2026-09-14)
 author: orchestrated assistant for the human
-tags: [exomemory, mcp, memory, omp, agentic-engineering]
+tags: [totalrecall, exomemory, mcp, memory, omp, agentic-engineering]
 updated: 2026-09-14
 ---
 
-# Exo Memory MCP Server — Spec v0.3
+# Total Recall MCP Server — Spec v0.3
+
+**Naming (human ruling, 2026-09-14):** the project is **Total Recall** (crate/binary `totalrecall`, MCP registration `totalrecall`, tool surface `mcp__totalrecall_<tool>`). "exomemory" names the *design pattern / memory-root instance* the server manages (`~/dev/exomemory/` is only the reference deployment's default root, §2) — the two systems are distinct and the server's identity never borrows the pattern's name. Retained in the exomemory namespace, deliberately: the memory-root contract surface (`EXOMEMORY_DIR`/`EXO_*` env names, the guard), the on-disk bucket layout under the configured root (`.claims/`, `.audit/`, `.locks/`, `.state/`, `.index/`), and every prose reference to the pattern. Distinct from the abandoned prior art `total-recall` (hyphenated, `~/dev/memory/`, §9) — this project inherits nothing from it.
 
 Single-binary MCP server that turns the side-band memory pattern — markdown files under a **configured memory root** (default `~/dev/exomemory/`, §2 Configuration) — into an enforced API for the buckets it owns. Drafted 2026-09-13; v0.2 reconciles v0.1 with the shipped enforcement plane and the real on-disk format; the build is **authorized** by the human 2026-09-13 (§12).
 
@@ -154,7 +156,7 @@ Worker signoff (docs-capture) | done: yes | unpushed: n/a (no repo writes) | awa
 ```json
 {
   "name": "claim_orchestrator",
-  "description": "Claims orchestrator-ship for a date. The on-disk claim file .claims/orchestrator-<date> is the source of truth (§5): the server re-reads it on every call, never a memory map. Fresh claim: O_CREAT|O_EXCL, returns a token. Same session_id as the recorded holder: returns the EXISTING token (re-claim after server restart succeeds). Different session on a live claim: refused — an isError result naming the holder and reason. Gate for write_dayfile / write_brief / write_warm_start.",
+  "description": "Claims orchestrator-ship for a date. The on-disk claim file .claims/orchestrator-<date> is the source of truth (§5): the server re-reads it on every call, never a memory map. Fresh claim: O_CREAT|O_EXCL, returns a token. Same session_id as the recorded holder: returns the EXISTING token — re-claim after a server restart succeeds ONLY when the deployment pins the id via EXO_SESSION_ID (§13): session ids are server-generated per process and never client-visible, so an unpinned new process is a NEW session and cannot re-claim. Different session on a live claim: refused — an isError result naming the holder and reason; that refusal's exits are the human's (no release tool exists by design) — report the named holder, do not poll. Gate for write_dayfile / write_brief / write_warm_start.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -194,7 +196,7 @@ Race example — second caller (loser), per §2 protocol shapes (refusal = resul
   "inputSchema": {
     "type": "object",
     "properties": {
-      "content": {"type": "string", "description": "Full new warm-start block (ranked 'if you read nothing else' list); the server moves the previous block to History"},
+      "content": {"type": "string", "description": "Full new warm-start block — INCLUDES its own '## If you read nothing else' heading (the block is written verbatim; a content without that heading produces a block read_signoff will rank as empty — the ranking parser keys on the heading; tests/gate_w3.rs pins the contract). The server moves the previous block to History"},
       "orchestrator_token": {"type": "string", "description": "Token returned by claim_orchestrator for today"}
     },
     "required": ["content", "orchestrator_token"],
@@ -283,7 +285,7 @@ No `edit_file` / `update_file`, no `delete_file` / remove, no generic `write_fil
 **The gate is uniform over every disk-touching call: all five append paths (`append_signoff`, `write_dayfile`, `write_brief`, `write_warm_start`, `log_tick`) and `claim_orchestrator` refuse until `read_signoff` has succeeded this session.** There is no audit-side exemption — `log_tick` appends to `.audit/` and is therefore gated exactly like the rest. Only the read/audit-side tools (`read_signoff` itself, `recall`, `last_tick`, `session_compliance`) run ungated. All gated tools return `isError: true` results (§2 shapes):
 
 ```json
-{"isError": true, "content": [{"type": "text", "text": "handshake incomplete — call read_signoff first"}]}
+{"isError": true, "content": [{"type": "text", "text": "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry."}]}
 ```
 
 Tool DESCRIPTIONS carry the MANDATORY contract text (most reliably-read context). Refusal messages restate the rule at the failure moment, e.g. `"memory protocol: read_signoff is the first action of every session — call it, then retry."`
@@ -301,7 +303,7 @@ def read_signoff(session):
 
 def _gate(fn):                      # wraps every tool in GATED — no exemptions
     if not handshaken[session.get()]:
-        return isError("handshake incomplete — call read_signoff first")
+        return isError("handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.")
     return fn()
 ```
 
@@ -393,13 +395,15 @@ The standing rules the server does **not** enforce — each stays with its shipp
 ## 11. Prompt layer (the only prompt that should exist — verbatim)
 
 ```text
-## Memory protocol (MCP: exomemory)
-- First action of every session: mcp__exomemory_read_signoff. No work before it returns.
-- Last action before any stop/compact/handoff: mcp__exomemory_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.
-- Facts come from mcp__exomemory_recall results (dated) or files — never from your context memory.
-- The server refuses every append path (including log_tick) without the read handshake. If refused, call read_signoff, then retry. Never write exomemory state except through exomemory tools.
+## Memory protocol (MCP: totalrecall)
+- First action of every session: mcp__totalrecall_read_signoff. No work before it returns.
+- Last action before any stop/compact/handoff: mcp__totalrecall_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.
+- Facts come from mcp__totalrecall_recall results (dated) or files — never from your context memory.
+- The server refuses every append path (including log_tick) without the read handshake. If refused, call read_signoff, then retry. Never write memory-root state except through this server's tools.
 ```
 (4 lines; brevity is compliance. Tool surface names follow omp's pinned convention `mcp__<server>_<tool>` — the tool bridge generates `mcp__<sanitized_server_name>_<sanitized_tool_name>` (`omp://mcp-server-tool-authoring.md` §4); the doubled-separator `mcp__server__tool` form seen elsewhere belongs to a different harness (Claude Code), not omp.)
+
+**Delivery channel (decided 2026-09-14, naive-client round):** this text rides the protocol, not a config file — the `initialize` result carries it verbatim as the MCP-standard `instructions` field (MCP 2025-06-18+ init-result field), which omp's client injects into the model-facing system prompt per connected server (`client.ts` init capture → `manager.ts getServerInstructions` → `sdk.ts rebuildSystemPrompt`, 4000-char cap; no mcp.json instructions key exists). Pinned line-by-line in `tests/rpc_tests.rs` (`initialize_result_carries_serverinfo_and_tools_only_capabilities`); the server registers as `totalrecall` in `~/.omp/agent/mcp.json`, so the `mcp__totalrecall_*` names resolve.
 
 ## 12. Roadmap & build trigger
 
@@ -466,3 +470,13 @@ OKF derived-index amendment round (2026-09-14) — human-authorized amendment, d
 - Surfaces amended: §2 storage table (`.index/` row + the after-table derived-cache sentence), §3 `recall` Effect + description (description text only — `inputSchema`, params and the scope enum unchanged), §3 EXCLUSIONS (housekeeping sentence extended with the derived `.index/` cache), §8 (tests 13–17 added; test 4 extended: non-vacuity and path confinement hold with or without the index). The `wiki/` / `inbox/` / `topics/` / `signoffs/` exclusions stand unchanged (§10); wiki/ entered no recall scope.
 
 - **Capabilities reconciled (finding F3, combined-diff review `job-2`, cast `vllm-local` @ 2026-09-14):** §2's pinned `initialize` capabilities now read `{"tools": {"listChanged": false}}` — the value the implementation actually ships (`src/rpc.rs:332`, `listChanged` pinned as a boolean by `tests/gate_w1.rs:126`); the server never emits `notifications/tools/list_changed`, so the semantic default was already `false` and the amendment is editorial: the tools-only / no-resources ruling above stands unchanged, only its quoted form was reconciled with the code (the code was NOT touched for this line).
+
+Naive-client discoverability round (2026-09-14) — six defects from an empirical naive-model study against the release binary (study + transcripts: /private/tmp/naive-client/STUDY.md), fixes as shipped:
+- **§3 `claim_orchestrator` description corrected:** re-claim after a server restart is now stated TRUE ONLY under a pinned `EXO_SESSION_ID` — session ids are server-generated per process and never client-visible, so the old verbatim sentence ("re-claim after server restart succeeds") was an unreachable promise for unpinned deployments; the held-claim refusal's exits are stated as the human's (report the named holder, do not poll — no release tool exists by design).
+- **§3 `write_warm_start` content field teaches the heading contract** (content must INCLUDE its `## If you read nothing else` heading or the block ranks as empty — previously pinned only in tests/gate_w3.rs, invisible to a model reading the schema).
+- **Refusal texts unified (DEFECT-5):** `append_signoff` now emits the shared `gate::HANDSHAKE_REFUSAL_MESSAGE` (was a private short variant) — §4's "the gate is uniform" now holds in code; the two rpc_tests equality pins updated to the long form verbatim.
+- **Cold-start livelock (DEFECT-1) mitigated, semantics unchanged:** `read_signoff`'s missing-file error gained the actionable tail (root not provisioned — NOT a call-order problem; retrying cannot fix it; provision or report to the human). Handshake still requires an existing signoff.md; provisioning remains the launcher/human path (matches the prior "two fixtures gain a seeded signoff.md" correction — the precondition is now stated, not discovered).
+- **Anti-bypass + exit-path teaching (DEFECT-2/3/6):** write paths carry the "Server-mediated writes ONLY" invariant; `write_dayfile` teaches the claim-first ordering and the stop-and-report exit for a held claim (pinned refusal texts untouched).
+- **Description channel:** model-facing descriptions hardened to the kaibo house style (payoff-first, sibling cross-routing, anti-modeling, CAPS invariants) — §3's schemas remain the exact contract; descriptions are its superset.
+
+Product naming round (2026-09-14) — human ruling: **the project is Total Recall, not exomemory** ("Exomemory is the design pattern that we want to mimic in total recall — different systems"). The original title "Exo Memory MCP Server" named the server after what it *serves*, which was always a misnomer once §2 made the root configurable — the binary is pattern-agnostic. Cutover: package/binary `exomem-mcp` → `totalrecall`, `serverInfo.name` → `totalrecall`, MCP registration key → `totalrecall`, §11 tool references → `mcp__totalrecall_*`, §11's final sentence now says "memory-root state … this server's tools" (the pattern's name no longer appears in the server's own identity surface); stderr log prefix `[exomem-mcp]` → `[totalrecall]`; rpc_tests pins updated to match. The contract layer is byte-frozen: `EXOMEMORY_DIR`/`EXO_*`, `.claims`/`.audit`/`.locks`/`.state`/`.index`, tool names, refusal texts — all unchanged, because they belong to the exomemory system the server manages, not to the server.

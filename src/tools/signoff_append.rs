@@ -35,6 +35,7 @@ use std::os::unix::fs::MetadataExt;
 
 use serde_json::{json, Map, Value};
 
+use crate::gate;
 use crate::rpc::{Handler, HandlerResult, Server, Tool};
 
 /// Serialized-entry cap in bytes (spec §3): the measured longest real entry
@@ -64,9 +65,6 @@ const RETRY_SLEEP: Duration = Duration::from_millis(100);
 /// is taken over immediately on the next attempt, no budget consumed.
 const MAX_ACQUIRE_ATTEMPTS: u32 = 50;
 
-/// The exact pinned refusal (spec §4), restated at the failure moment.
-const GATE_REFUSAL: &str = "handshake incomplete — call read_signoff first";
-
 /// Per-process acquire sequence: makes each acquisition's lock contents
 /// unique even for two acquisitions from the same pid+session in the same
 /// second, so "remove your own lock file" can never remove a successor's.
@@ -77,7 +75,7 @@ static ACQUIRE_NONCE: AtomicU64 = AtomicU64::new(0);
 fn append_signoff_tool() -> Tool {
     Tool {
         name: "append_signoff".to_string(),
-        description: "Appends this session's signoff verbatim to signoff.md as exactly ONE line: `Worker signoff (<role>) | done: <yes|no> | unpushed: <…> | awaits human: <…> | still running: <…>` — the on-disk format the shipped guard and launcher already parse — with server-appended `| workflow: … | ts: <ISO-8601Z> | session: …` fields only AFTER the required ones, and `| kaibo review: …` when the optional field is present. Append-only by construction under an exclusive `.locks/` lock file; entries (serialized form, incl. server stamps) > 16384 bytes refused — the cap clears the measured longest real entry, 4919 bytes at signoff.md:356 (measured 2026-09-13). REFUSES with 'handshake incomplete — call read_signoff first' unless read_signoff succeeded this session. Last action before any stop/compact/handoff.".to_string(),
+        description: "Last action before any stop/compact/handoff: appends this session's signoff verbatim to signoff.md as exactly ONE line: `Worker signoff (<role>) | done: <yes|no> | unpushed: <…> | awaits human: <…> | still running: <…>` — the on-disk format the shipped guard and launcher already parse — with server-appended `| workflow: … | ts: <ISO-8601Z> | session: …` fields only AFTER the required ones, and `| kaibo review: …` when the optional field is present. APPEND-ONLY by construction under an exclusive `.locks/` lock file; entries (serialized form, incl. server stamps) > 16384 bytes refused — the cap clears the measured longest real entry, 4919 bytes at signoff.md:356 (measured 2026-09-13). REFUSES with 'handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.' unless read_signoff succeeded this session — call read_signoff, then retry this once. Server-mediated writes ONLY — direct edits to these files (signoff.md is written by this tool and write_warm_start alone) bypass the lock, the audit trail, and the guard/launcher gates and break the launcher's by-FILE verification and the guard's schema check; to read past signoffs use `recall`.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -136,13 +134,8 @@ pub fn append_signoff(server: &mut Server, session: &str, args: &Value) -> Handl
     // 1. The uniform gate (spec §4) — same shape as every other gated
     //    tool: exact pinned refusal, the attempt is counted so
     //    `session_compliance` can observe it, and the write never lands.
-    let handshaken = server.handshaken.get(session).copied().unwrap_or(false);
-    if !handshaken {
-        *server
-            .attempted_write_before_handshake
-            .entry(session.to_string())
-            .or_insert(0) += 1;
-        return HandlerResult::Err(GATE_REFUSAL.to_string());
+    if let Err(msg) = gate::gate(server, session) {
+        return HandlerResult::Err(msg);
     }
 
     // 2. Validate before touching any disk (refusals here have no
@@ -599,13 +592,13 @@ fn release_lock(root: &Path, token: &LockToken) {
     ];
     if !matches.iter().all(|(a, b)| a.as_deref() == b.as_deref()) {
         eprintln!(
-            "[exomem-mcp] append_signoff: .locks/{LOCK_NAME} changed under us (holder record no longer matches) — leaving it for its current holder"
+            "[totalrecall] append_signoff: .locks/{LOCK_NAME} changed under us (holder record no longer matches) — leaving it for its current holder"
         );
         return;
     }
     if let Err(e) = std::fs::remove_file(&path) {
         eprintln!(
-            "[exomem-mcp] append_signoff: could not remove our .locks/{LOCK_NAME} ({e}) — the stale takeover will reclaim it"
+            "[totalrecall] append_signoff: could not remove our .locks/{LOCK_NAME} ({e}) — the stale takeover will reclaim it"
         );
     }
 }
@@ -762,7 +755,7 @@ mod tests {
     #[test]
     fn stale_takeover_never_removes_a_successors_fresh_lock() {
         let dir = std::env::temp_dir().join(format!(
-            "exomem-f2-signoff-{}-takeover",
+            "totalrecall-f2-signoff-{}-takeover",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

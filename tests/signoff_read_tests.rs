@@ -10,15 +10,15 @@
 
 use std::path::PathBuf;
 
-use exomem_mcp::config;
-use exomem_mcp::gate;
-use exomem_mcp::rpc::{HandlerResult, Server};
-use exomem_mcp::tools::signoff_read;
+use totalrecall::config;
+use totalrecall::gate;
+use totalrecall::rpc::{HandlerResult, Server};
+use totalrecall::tools::signoff_read;
 use serde_json::json;
 
 fn tmp_root(name: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!(
-        "exomem-signoff-read-{name}-{}",
+        "totalrecall-signoff-read-{name}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&p);

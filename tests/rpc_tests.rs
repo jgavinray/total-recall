@@ -32,15 +32,15 @@
 //!   clean EOF -> exit 0 (spawns the real binary; this is the one test
 //!   coupled to the sibling's `src/main.rs` landing)
 //!
-//! This file compiles against the `exomem_mcp` lib (wave 2: all
+//! This file compiles against the `totalrecall` lib (wave 2: all
 //! modules landed).
 
-use exomem_mcp::rpc::{self, Server};
+use totalrecall::rpc::{self, Server};
 use serde_json::{json, Value};
 use std::io::Write;
 
 fn rpc_root(name: &str) -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!("exomem-rpc-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("totalrecall-rpc-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -159,7 +159,7 @@ fn refusal_carries_exact_spec_text_and_echoes_id() {
     );
     assert_eq!(
         v["result"]["content"][0]["text"],
-        "handshake incomplete — call read_signoff first",
+        "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.",
         "the refusal must carry the exact spec §4 text"
     );
 }
@@ -183,7 +183,7 @@ fn initialize_does_not_grant_the_handshake() {
     let v: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(
         v["result"]["content"][0]["text"],
-        "handshake incomplete — call read_signoff first",
+        "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.",
         "initialize must not open the gate"
     );
 }
@@ -333,7 +333,7 @@ fn serve_stdio_emits_frames_keeps_notifications_silent_and_exits_zero() {
     // isolated: ambient EXOMEMORY_DIR / EXO_DIR must not leak in — the
     // --root flag is the top of the precedence chain (contract).
     let dir = rpc_root("stdio");
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_exomem-mcp"));
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_totalrecall"));
     cmd.arg("--root")
         .arg(dir.display().to_string())
         .env_remove("EXOMEMORY_DIR")
@@ -388,7 +388,7 @@ fn initialize_result_carries_serverinfo_and_tools_only_capabilities() {
     )
     .unwrap();
     let v: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["result"]["serverInfo"]["name"], "exomem-mcp");
+    assert_eq!(v["result"]["serverInfo"]["name"], "totalrecall");
     assert_eq!(v["result"]["serverInfo"]["version"], "0.3.0");
     assert!(
         v["result"]["capabilities"]["tools"].is_object(),
@@ -398,6 +398,26 @@ fn initialize_result_carries_serverinfo_and_tools_only_capabilities() {
         v["result"]["capabilities"].get("resources").is_none(),
         "no MCP resources surface"
     );
+    // The spec §11 prompt layer rides the MCP-native `instructions`
+    // channel VERBATIM — omp injects it into the model-facing system
+    // prompt (client.ts → getServerInstructions → rebuildSystemPrompt).
+    // Pinned line-by-line against §11 so drift between contract and
+    // wire is a test failure, not a silent prompt difference.
+    let instructions = v["result"]["instructions"]
+        .as_str()
+        .expect("initialize carries instructions");
+    for line in [
+        "## Memory protocol (MCP: totalrecall)",
+        "- First action of every session: mcp__totalrecall_read_signoff. No work before it returns.",
+        "- Last action before any stop/compact/handoff: mcp__totalrecall_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.",
+        "- Facts come from mcp__totalrecall_recall results (dated) or files — never from your context memory.",
+        "- The server refuses every append path (including log_tick) without the read handshake. If refused, call read_signoff, then retry. Never write memory-root state except through this server's tools.",
+    ] {
+        assert!(
+            instructions.lines().any(|l| l == line),
+            "§11 line must ride verbatim: {line}"
+        );
+    }
 }
 
 #[test]

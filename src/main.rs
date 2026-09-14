@@ -1,6 +1,6 @@
-//! exomem-mcp — single-binary MCP server entry point (spec §2, §12).
+//! totalrecall — single-binary MCP server entry point (spec §2, §12).
 //!
-//! Usage: `exomem-mcp [--root <path>] [--self-check]`
+//! Usage: `totalrecall [--root <path>] [--self-check]`
 //!
 //! `--self-check` resolves the memory root, runs the init-fingerprint
 //! startup gate, prints ONE JSON line `{root, tz, tz_offset_minutes,
@@ -13,34 +13,34 @@ fn main() {
     let (cli_root, self_check) = match parse_args() {
         Ok(parsed) => parsed,
         Err(msg) => {
-            eprintln!("exomem-mcp: {msg}");
-            eprintln!("usage: exomem-mcp [--root <path>] [--self-check]");
+            eprintln!("totalrecall: {msg}");
+            eprintln!("usage: totalrecall [--root <path>] [--self-check]");
             exit(2);
         }
     };
 
-    let args = exomem_mcp::config::ConfigArgs { cli_root };
-    let root = match exomem_mcp::config::resolve_root(&args) {
+    let args = totalrecall::config::ConfigArgs { cli_root };
+    let root = match totalrecall::config::resolve_root(&args) {
         Ok(root) => root,
         Err(msg) => {
-            eprintln!("exomem-mcp: refusing to start: {msg}");
+            eprintln!("totalrecall: refusing to start: {msg}");
             exit(1);
         }
     };
 
     if self_check {
-        if let Err(msg) = exomem_mcp::config::init_state(&root) {
-            eprintln!("exomem-mcp: self-check failed: {msg}");
+        if let Err(msg) = totalrecall::config::init_state(&root) {
+            eprintln!("totalrecall: self-check failed: {msg}");
             exit(1);
         }
-        let (tz, offset) = match exomem_mcp::config::resolve_tz() {
+        let (tz, offset) = match totalrecall::config::resolve_tz() {
             Ok(pair) => pair,
             Err(msg) => {
-                eprintln!("exomem-mcp: self-check failed: {msg}");
+                eprintln!("totalrecall: self-check failed: {msg}");
                 exit(1);
             }
         };
-        let server = exomem_mcp::rpc::new_server(&root);
+        let server = totalrecall::rpc::new_server(&root);
         // One JSON line on stdout, in the contract's field order.
         println!(
             "{{\"root\":{},\"tz\":{},\"tz_offset_minutes\":{},\"session\":{}}}",
@@ -54,15 +54,15 @@ fn main() {
 
     // Startup: the init fingerprint IS the loud gate (spec §2) — a
     // mixed-TZ or moved shared root refuses before anything is served.
-    if let Err(msg) = exomem_mcp::config::init_state(&root) {
-        eprintln!("exomem-mcp: refusing to start: {msg}");
+    if let Err(msg) = totalrecall::config::init_state(&root) {
+        eprintln!("totalrecall: refusing to start: {msg}");
         exit(1);
     }
-    let code = exomem_mcp::rpc::serve_stdio(&root);
+    let code = totalrecall::rpc::serve_stdio(&root);
     exit(code);
 }
 
-/// Parses `exomem-mcp [--root <path>] [--self-check]` from argv.
+/// Parses `totalrecall [--root <path>] [--self-check]` from argv.
 ///
 /// The parsed `--root` goes into the lib's `ConfigArgs`; `--self-check`
 /// is binary-only state (the contract pins `ConfigArgs` to one field,

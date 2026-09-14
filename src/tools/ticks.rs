@@ -58,7 +58,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "log_tick".to_string(),
-            description: "Records a check result as {ts, session_id, check, result} in .audit/YYYY-MM-DD.jsonl (the only other append path). Requires the handshake like every other append path (§4). Idle ticks are a local stat of shared files; network/MCP calls on demand, not per-heartbeat.".to_string(),
+            description: "Record a check result the moment the check runs — this is the evidence last_tick answers from and session_compliance counts: appends {ts, session_id, check, result} to .audit/YYYY-MM-DD.jsonl. Gated like every other append path (§4): a 'handshake incomplete' refusal means call read_signoff then retry this once. Server-mediated writes ONLY — the audit trail is written by this tool and the server's own write stamps: direct edits to these files fabricate compliance evidence, bypass the lock, the audit trail, and the guard/launcher gates, and break the launcher's by-FILE verification and the measured numbers. Idle ticks are a local stat of shared files; network/MCP calls on demand, not per-heartbeat.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -71,11 +71,11 @@ pub fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "last_tick".to_string(),
-            description: "Returns the latest tick for a check. Errors LOUDLY when a registered check (has ticks on record) has aged to or past the tick window (server constant, 45 min; the boundary is pinned by test 11): 'silence is never good news: check X last ticked <ts> (<age> ago)'. Unregistered check is an error too.".to_string(),
+            description: "Ask whether a check is still alive before trusting it: returns the latest tick for a check, UNGATED and always available — the read-side partner of log_tick, which is how a tick gets on record. Errors LOUDLY when a registered check (has ticks on record) has aged to or past the tick window (server constant, 45 min; the boundary is pinned by test 11): 'silence is never good news: check X last ticked <ts> (<age> ago)'. An unregistered check is an error too — never a silent 'looks fine'.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "check": {"type": "string", "description": "Registered check name"}
+                    "check": {"type": "string", "description": "Registered check name — a name with no ticks on record is an error, not an empty result"}
                 },
                 "required": ["check"],
                 "additionalProperties": false

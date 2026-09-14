@@ -31,14 +31,14 @@
 //!   from the CURRENT process's gate counter (>0), refused_count = the current
 //!   process's gate-refusal counter for the session.
 
-use exomem_mcp::config;
-use exomem_mcp::rpc::{HandlerResult, Server};
-use exomem_mcp::tools::{compliance, recall, ticks};
+use totalrecall::config;
+use totalrecall::rpc::{HandlerResult, Server};
+use totalrecall::tools::{compliance, recall, ticks};
 use serde_json::json;
 use std::path::PathBuf;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("exomem-gate-w4-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("totalrecall-gate-w4-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -70,7 +70,7 @@ fn seeded(root: &PathBuf) -> Server {
     std::fs::create_dir_all(root.join("wiki")).unwrap();
     std::fs::write(root.join("wiki/parser-notes.md"), "# Parser notes\n\nParser edge BLOCKED: version mismatch in the fixture loader\n").unwrap();
     let mut s = Server::new_server(root);
-    let _ = exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe");
+    let _ = totalrecall::tools::signoff_read::read_signoff(&mut s, "probe");
     s
 }
 
@@ -208,7 +208,7 @@ fn log_tick_after_handshake_appends_audit_jsonl() {
     // a root with no signoff.md — so this fixture's own premise ("after the
     // handshake") needs the bucket on disk. No assertion touched.
     std::fs::write(dir.join("signoff.md"), SEED).unwrap();
-    let _ = exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe");
+    let _ = totalrecall::tools::signoff_read::read_signoff(&mut s, "probe");
     match ticks::log_tick(&mut s, "probe", &json!({"check": "model-server-health", "result": "ok"})) {
         HandlerResult::Err(e) => panic!("post-handshake tick must succeed: {e}"),
         HandlerResult::Ok(_) => {}
@@ -218,7 +218,7 @@ fn log_tick_after_handshake_appends_audit_jsonl() {
     // authority log_tick writes through (claims::local_date) — so this pins the
     // path shape `.audit/<local-date>.jsonl` instead of one calendar day. The
     // assertion below is unchanged.
-    let local = exomem_mcp::tools::claims::local_date(&dir).unwrap();
+    let local = totalrecall::tools::claims::local_date(&dir).unwrap();
     let f = dir.join(format!(".audit/{local}.jsonl"));
     let text = std::fs::read_to_string(&f).unwrap();
     let j: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
@@ -297,11 +297,11 @@ fn compliance_report_is_audit_derived_and_measured() {
     // one REAL refused attempt before the handshake — the gate counter is
     // observable at the gate, and the audit log never records refusals
     // (they land nothing).
-    let _ = exomem_mcp::tools::signoff_append::append_signoff(&mut s, "probe", &json!({"role":"r","workflow":"wf","done":"yes"}));
+    let _ = totalrecall::tools::signoff_append::append_signoff(&mut s, "probe", &json!({"role":"r","workflow":"wf","done":"yes"}));
     assert_eq!(s.attempted_write_before_handshake.get("probe").cloned().unwrap_or(0), 1, "counter observable");
-    let _ = exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe");
+    let _ = totalrecall::tools::signoff_read::read_signoff(&mut s, "probe");
     // two mutating writes AFTER the handshake — each lands an audit entry.
-    match exomem_mcp::tools::signoff_append::append_signoff(&mut s, "probe", &json!({"role":"r","workflow":"wf","done":"yes"})) {
+    match totalrecall::tools::signoff_append::append_signoff(&mut s, "probe", &json!({"role":"r","workflow":"wf","done":"yes"})) {
         HandlerResult::Err(e) => panic!("post-handshake append must succeed: {e}"),
         HandlerResult::Ok(_) => {}
     }

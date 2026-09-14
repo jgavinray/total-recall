@@ -35,15 +35,15 @@
 //!   the region boundary stays clean (the file ends with a newline,
 //!   the byte-exact expectation is unchanged).
 
-use exomem_mcp::config;
-use exomem_mcp::rpc::{HandlerResult, Server};
-use exomem_mcp::tools::warmstart;
+use totalrecall::config;
+use totalrecall::rpc::{HandlerResult, Server};
+use totalrecall::tools::warmstart;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("exomem-warmstart-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("totalrecall-warmstart-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -120,7 +120,7 @@ fn seeded(root: &PathBuf) -> Server {
     config::init_state(root).unwrap();
     std::fs::write(root.join("signoff.md"), SEED).unwrap();
     let mut s = Server::new_server(root);
-    match exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake must succeed on the SEED fixture: {e}"),
     }
@@ -302,7 +302,7 @@ fn warmstart_missing_region_refused() {
     .unwrap();
     let before = std::fs::read(dir.join("signoff.md")).unwrap();
     let mut s = Server::new_server(&dir);
-    match exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake: {e}"),
     }
@@ -335,7 +335,7 @@ fn warmstart_missing_file_refused_no_file_created() {
     // delete it: the in-process handshake survives, so the call
     // reaches the under-lock read — where the absence is detected.
     std::fs::write(dir.join("signoff.md"), SEED).unwrap();
-    match exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake: {e}"),
     }
@@ -392,7 +392,7 @@ fn warmstart_history_absent_created_at_eof() {
     )
     .unwrap();
     let mut s = Server::new_server(&dir);
-    match exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake: {e}"),
     }
@@ -435,7 +435,7 @@ fn warmstart_history_ends_at_next_heading() {
     .unwrap();
     let before = std::fs::read(dir.join("signoff.md")).unwrap();
     let mut s = Server::new_server(&dir);
-    match exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake: {e}"),
     }
@@ -500,4 +500,34 @@ fn warmstart_content_without_trailing_newline_normalized() {
     assert!(text.ends_with('\n'), "the file ends with a newline");
     assert_eq!(text, EXPECTED, "normalization changes no other byte");
     assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "the lock is released");
+}
+
+#[test]
+fn warmstart_heading_less_content_refused_with_the_contract() {
+    let dir = tmp_root("warm-noheading");
+    let mut s = seeded(&dir);
+    full_claim(&dir, "probe", "t-warm", &mut s);
+    let before = std::fs::read(dir.join("signoff.md")).unwrap();
+    // The study's DEFECT-4 input: plausible ranked lines WITHOUT their
+    // own '## If you read nothing else' heading. The content is stored
+    // verbatim, so heading-less input used to land as a dead block
+    // that the NEXT read_signoff answered ranked: [] while the write
+    // itself had reported success — the contract is now refused,
+    // loudly, before any lock or byte.
+    let r = warmstart::write_warm_start(
+        &mut s,
+        "probe",
+        &json!({"content": "1. **New item** — fresh prose\n2. second\n", "orchestrator_token": "t-warm"}),
+    );
+    match r {
+        HandlerResult::Err(msg) => assert!(
+            msg.contains("must include its own '## If you read nothing else' heading"),
+            "the refusal must state the heading contract: {msg}"
+        ),
+        HandlerResult::Ok(_) => {
+            panic!("heading-less content must be refused, never stored as a dead block")
+        }
+    }
+    assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
+    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "no lock file on a pre-lock refusal");
 }

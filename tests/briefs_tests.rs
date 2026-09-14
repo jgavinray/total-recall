@@ -32,15 +32,15 @@
 //! - a byte-identical re-arrival is idempotent: the existing archive
 //!   is kept and re-reported, never rewritten.
 
-use exomem_mcp::config;
-use exomem_mcp::rpc::{HandlerResult, Server};
-use exomem_mcp::tools::briefs;
+use totalrecall::config;
+use totalrecall::rpc::{HandlerResult, Server};
+use totalrecall::tools::briefs;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("exomem-briefs-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("totalrecall-briefs-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -93,7 +93,7 @@ fn seeded(root: &PathBuf) -> Server {
     config::init_state(root).unwrap();
     std::fs::write(root.join("signoff.md"), SEED).unwrap();
     let mut s = Server::new_server(root);
-    match exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake must succeed on the SEED fixture: {e}"),
     }

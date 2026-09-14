@@ -309,8 +309,16 @@ fn invalid_request_frame(id: Value, message: &str) -> String {
 
 /// Identity the server reports in the `initialize` result (MCP requires
 /// `serverInfo`): the bin name, versioned with spec.md (v0.3).
-const SERVER_NAME: &str = "exomem-mcp";
+const SERVER_NAME: &str = "totalrecall";
 const SERVER_VERSION: &str = "0.3.0";
+
+/// The spec §11 prompt layer — "the only prompt that should exist" —
+/// delivered VERBATIM on the MCP-native channel: omp's client reads
+/// `instructions` off the initialize result and injects it into the
+/// model-facing system prompt per connected server. The tool names are
+/// the harness-generated surface names (`mcp__<server>_<tool>`); the
+/// server registers as `totalrecall`, so they resolve.
+const SERVER_INSTRUCTIONS: &str = "## Memory protocol (MCP: totalrecall)\n- First action of every session: mcp__totalrecall_read_signoff. No work before it returns.\n- Last action before any stop/compact/handoff: mcp__totalrecall_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.\n- Facts come from mcp__totalrecall_recall results (dated) or files — never from your context memory.\n- The server refuses every append path (including log_tick) without the read handshake. If refused, call read_signoff, then retry. Never write memory-root state except through this server's tools.";
 
 /// `initialize`: negotiate the protocol revision. The server answers with
 /// the requested revision when it implements it (the current `2026-07-28`,
@@ -331,6 +339,7 @@ fn handle_initialize(request: &Value) -> Value {
         "protocolVersion": protocol_version,
         "capabilities": {"tools": {"listChanged": false}},
         "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+        "instructions": SERVER_INSTRUCTIONS,
     })
 }
 
@@ -360,7 +369,7 @@ fn tools_list_result(server: &Server) -> Value {
 pub fn serve_stdio(root: &Path) -> i32 {
     let mut server = Server::new_server(root);
     eprintln!(
-        "[exomem-mcp] session {} — JSON-RPC 2.0 over stdio (root: {})",
+        "[totalrecall] session {} — JSON-RPC 2.0 over stdio (root: {})",
         server.session_id,
         server.root.display()
     );
@@ -370,7 +379,7 @@ pub fn serve_stdio(root: &Path) -> i32 {
         let line = match line {
             Ok(line) => line,
             Err(err) => {
-                eprintln!("[exomem-mcp] stdin read error: {err}");
+                eprintln!("[totalrecall] stdin read error: {err}");
                 return 1;
             }
         };
@@ -381,15 +390,15 @@ pub fn serve_stdio(root: &Path) -> i32 {
             Ok(frame) => {
                 if !frame.is_empty() {
                     if let Err(err) = writeln!(std::io::stdout(), "{frame}") {
-                        eprintln!("[exomem-mcp] stdout write error: {err}");
+                        eprintln!("[totalrecall] stdout write error: {err}");
                         return 1;
                     }
                 }
             }
             Err(frame) => {
-                eprintln!("[exomem-mcp] protocol error frame: {frame}");
+                eprintln!("[totalrecall] protocol error frame: {frame}");
                 if let Err(err) = writeln!(std::io::stdout(), "{frame}") {
-                    eprintln!("[exomem-mcp] stdout write error: {err}");
+                    eprintln!("[totalrecall] stdout write error: {err}");
                     return 1;
                 }
             }

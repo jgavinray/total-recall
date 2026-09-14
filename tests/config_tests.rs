@@ -1,4 +1,4 @@
-//! Worker self-checks for `exomem_mcp::config` (ExoM0, wave 1).
+//! Worker self-checks for `totalrecall::config` (ExoM0, wave 1).
 //!
 //! Module-scoped only, and deliberately NON-OVERLAPPING with the
 //! orchestrator gate (`tests/gate_w1.rs`, which must not be edited):
@@ -24,7 +24,7 @@
 //! - a fingerprint naming a different root refusing loudly (the gate
 //!   forges `tz`; this forges `root`).
 
-use exomem_mcp::config::{self, ConfigArgs};
+use totalrecall::config::{self, ConfigArgs};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -40,7 +40,7 @@ fn env_guard() -> std::sync::MutexGuard<'static, ()> {
 /// per test so parallel tests never share a directory).
 fn tmp_root(name: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!(
-        "exomem-cfg-{name}-{}",
+        "totalrecall-cfg-{name}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&p);

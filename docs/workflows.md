@@ -1,4 +1,4 @@
-# exomem-mcp — workflow diagrams
+# totalrecall — workflow diagrams
 
 Companion view to `spec.md` (v0.3): how the workflows actually run, as built in commit 0a1a4b1.
 The load-bearing reading: diagrams 2 and 3 encode the two invariants everything else hangs on —
@@ -17,7 +17,7 @@ sequenceDiagram
     S->>R: tools/call append_signoff
     R->>G: gate check (no handshake yet)
     G-->>R: refused + counted (session_compliance sees it)
-    R-->>S: isError "handshake incomplete — call read_signoff first"
+    R-->>S: isError "handshake incomplete — call read_signoff first — memory protocol: … call it, then retry."
     Note over R,D: zero bytes written — both halves of §8
 
     S->>R: tools/call read_signoff

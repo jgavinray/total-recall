@@ -67,17 +67,17 @@ use crate::rpc::{Handler, HandlerResult, Server, Tool};
 pub fn tools() -> Vec<Tool> {
     vec![Tool {
         name: "write_warm_start".to_string(),
-        description: "Orchestrator-gated (requires today's claim token). Rewrites ONLY the 'If you read nothing else' warm-start block of signoff.md (signoff.md:5) and moves the superseded block to the 'History' section (signoff.md:119) — implementing the 'warm-start = triage, not a log' rule (CLAUDE.md:9), which otherwise has NO writer. Every byte outside the rewritten region — all worker-signoff lines, verbatim — is preserved: the server writes a tmp file and renames atomically under the signoff lock, then re-reads and fails LOUDLY (isError, keeps the old file) unless the non-rewritten tail is byte-identical to the original.".to_string(),
+        description: "Use at the start of the day (or when priorities change) to set the ranked 'if you read nothing else' list that read_signoff hands every session: rewrites ONLY the 'If you read nothing else' warm-start block of signoff.md (signoff.md:5) and moves the superseded block to the 'History' section (signoff.md:119) — implementing the 'warm-start = triage, not a log' rule (CLAUDE.md:9), which otherwise has NO writer. Orchestrator-gated: pass today's claim token from claim_orchestrator; a 'handshake incomplete' refusal means call read_signoff then retry this once. Worker signoff lines are append_signoff's territory, never yours. Every byte outside the rewritten region — all worker-signoff lines, verbatim — is preserved: the server writes a tmp file and renames atomically under the signoff lock, then re-reads and fails LOUDLY (isError, keeps the old file) unless the non-rewritten tail is byte-identical to the original. Server-mediated writes ONLY — direct edits to these files (signoff.md is rewritten by this tool and appended to by append_signoff alone) bypass the lock, the audit trail, and the guard/launcher gates and break the launcher's by-FILE verification.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "Full new warm-start block (ranked 'if you read nothing else' list); the server moves the previous block to History"
+                    "description": "Full new warm-start block INCLUDING its own '## If you read nothing else' heading line — the server stores content verbatim and moves the superseded block (heading included) to History. Content without that heading on its own line is REFUSED: the reader ranks only the numbered lines UNDER the heading, so a heading-less block would read back as ranked: [] (naive-client study §3.5)"
                 },
                 "orchestrator_token": {
                     "type": "string",
-                    "description": "Token returned by claim_orchestrator for today"
+                    "description": "Token returned by claim_orchestrator for today — the claim file's token, this session's stored token, and this one must all agree"
                 }
             },
             "required": ["content", "orchestrator_token"],
@@ -110,11 +110,15 @@ fn write_warm_start_handler(server: &mut Server, arguments: &Value) -> HandlerRe
 /// bytes written: (1) handshake gate, (2) argument validation,
 /// (3) the claim gate — the presented token vs. the claim file's
 /// token AND the session's stored token, BEFORE any lock is
-/// acquired, (4) only then the locked rewrite: read the file under
-/// the signoff lock, locate the region, compose the new bytes from
-/// the original's own pieces, tmp+rename, re-read, and fail loudly
-/// (restoring the original) unless the re-read is byte-identical to
-/// the intended bytes.
+/// acquired, (4) the heading contract — content must carry its own
+/// `## If you read nothing else` line, since the reader ranks only the
+/// numbered lines UNDER that heading and heading-less content would
+/// land as a dead block (read_signoff answers ranked: [] — the study's
+/// §3.5 symptom), still decided with ZERO disk contact, (5) only then
+/// the locked rewrite: read the file under the signoff lock, locate
+/// the region, compose the new bytes from the original's own pieces,
+/// tmp+rename, re-read, and fail loudly (restoring the original)
+/// unless the re-read is byte-identical to the intended bytes.
 pub fn write_warm_start(server: &mut Server, session: &str, args: &Value) -> HandlerResult {
     // 1. The uniform gate (spec §4).
     if let Err(msg) = gate::gate(server, session) {
@@ -155,7 +159,19 @@ pub fn write_warm_start(server: &mut Server, session: &str, args: &Value) -> Han
         ));
     }
 
-    // 4. The rewrite, under the signoff lock. The lock is acquired
+    // 4. The heading contract (naive-client study DEFECT-4): the
+    //    content is stored VERBATIM and the reader ranks only the
+    //    numbered lines UNDER its `## If you read nothing else`
+    //    heading — heading-less content used to land as a dead block
+    //    (read_signoff answered ranked: [] after a reported-successful
+    //    write). Refuse it loudly, before the lock is acquired.
+    if !content.lines().any(|line| line == "## If you read nothing else") {
+        return HandlerResult::Err(
+            "write_warm_start refused: content must include its own '## If you read nothing else' heading line — the server stores content verbatim and read_signoff ranks only the numbered lines UNDER that heading, so heading-less content lands as a dead block (read_signoff would answer ranked: []) — nothing written".to_string(),
+        );
+    }
+
+    // 5. The rewrite, under the signoff lock. The lock is acquired
     //    ONLY now — after every refusal above — and is released on
     //    every exit path of the critical section.
     let lock = match acquire_lock(&root, session) {
@@ -487,7 +503,7 @@ fn rewrite_under_lock(root: &Path, content: &str) -> Result<Value, String> {
         match std::fs::write(&tmp, original.as_slice()).and_then(|_| std::fs::rename(&tmp, &path)) {
             Ok(()) => {}
             Err(e) => eprintln!(
-                "[exomem-mcp] write_warm_start: could not restore the original signoff.md ({e}) — the file on disk is the unverified rewrite"
+                "[totalrecall] write_warm_start: could not restore the original signoff.md ({e}) — the file on disk is the unverified rewrite"
             ),
         }
         let _ = std::fs::remove_file(&tmp);
@@ -794,13 +810,13 @@ fn release_lock(root: &Path, token: &LockToken) {
     ];
     if !matches.iter().all(|(a, b)| a.as_deref() == b.as_deref()) {
         eprintln!(
-            "[exomem-mcp] write_warm_start: .locks/{LOCK_NAME} changed under us (holder record no longer matches) — leaving it for its current holder"
+            "[totalrecall] write_warm_start: .locks/{LOCK_NAME} changed under us (holder record no longer matches) — leaving it for its current holder"
         );
         return;
     }
     if let Err(e) = std::fs::remove_file(&path) {
         eprintln!(
-            "[exomem-mcp] write_warm_start: could not remove our .locks/{LOCK_NAME} ({e}) — the stale takeover will reclaim it"
+            "[totalrecall] write_warm_start: could not remove our .locks/{LOCK_NAME} ({e}) — the stale takeover will reclaim it"
         );
     }
 }

@@ -59,7 +59,7 @@ use crate::rpc::{Handler, HandlerResult, Server, Tool};
 pub fn tools() -> Vec<Tool> {
     vec![Tool {
         name: "write_brief".to_string(),
-        description: "Writes briefs/<worker>.md (kickoff brief), archiving the superseded version to briefs/<worker>-<superseded-date>T<HHMMSS>Z.md — the UTC timestamp OF THE SUPERSEDED CONTENT (its file mtime, rendered in UTC), so two writes for one worker on one day can never produce the same archive name and no archive is ever overwritten. Orchestrator-gated: requires this session holds today's claim token.".to_string(),
+        description: "Publish or update ONE worker's kickoff brief (the orchestrator's tool — workers never call it for their own brief): writes briefs/<worker>.md, archiving the superseded version to briefs/<worker>-<superseded-date>T<HHMMSS>Z.md — the UTC timestamp OF THE SUPERSEDED CONTENT (its file mtime, rendered in UTC), so two writes for one worker on one day can never produce the same archive name and no archive is ever overwritten. ORCHESTRATOR-ONLY: this session must hold today's claim token (call claim_orchestrator first; the schema takes no token — the server matches your session against the on-disk claim). REFUSED with 'nothing written' when the claim is missing or held elsewhere; a 'handshake incomplete' refusal means call read_signoff then retry this once. briefs/ is written ONLY through this tool — hand-editing a brief skips the archive and silently destroys the superseded version; to READ briefs use `recall` with scope 'briefs'.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
