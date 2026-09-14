@@ -1,0 +1,17 @@
+[package]
+name = "exomem-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0"
+description = "Exo Memory MCP server — markdown side-band memory enforced over the buckets it owns"
+
+[dependencies]
+serde_json = "1"
+
+[lib]
+name = "exomem_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "exomem-mcp"
+path = "src/main.rs"
