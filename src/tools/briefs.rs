@@ -154,7 +154,23 @@ pub fn write_brief(server: &mut Server, session: &str, args: &Value) -> HandlerR
 
     // 5. The disk work.
     match perform_write_brief(&root, &worker, &brief) {
-        Ok(v) => HandlerResult::Ok(v),
+        Ok(mut v) => {
+            // F1 (signoffs/review_Wave4OKF.md 2d): the brief HAS
+            // landed, so a missing audit tail is reported as an
+            // `audit_error` field on the SUCCESS result — never as
+            // `isError`, which spec §2 scopes to refusal/validation/
+            // gate-denial and which, rendered over landed bytes, is the
+            // both-halves FAIL spec §8 pins. When the audit landed the
+            // success shape is byte-identical: no `audit_error` key.
+            let audit_error =
+                crate::tools::ticks::audit_write(&root, &server.session_id, "write_brief").err();
+            if let Some(err) = audit_error {
+                if let Some(object) = v.as_object_mut() {
+                    object.insert("audit_error".to_string(), json!(err));
+                }
+            }
+            HandlerResult::Ok(v)
+        }
         Err(msg) => HandlerResult::Err(msg),
     }
 }

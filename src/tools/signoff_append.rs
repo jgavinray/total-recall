@@ -31,6 +31,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::os::unix::fs::MetadataExt;
 
 use serde_json::{json, Map, Value};
 
@@ -180,11 +181,28 @@ pub fn append_signoff(server: &mut Server, session: &str, args: &Value) -> Handl
     // 4. The append itself, under the exclusive lock (spec §2).
     let root = server.root.clone();
     match perform_append(&root, session, &line) {
-        Ok(()) => HandlerResult::Ok(json!({
-            "appended": true,
-            "path": root.join("signoff.md").display().to_string(),
-            "entry": line,
-        })),
+        Ok(()) => {
+            // F1 (signoffs/review_Wave4OKF.md 2d): the line HAS landed,
+            // so a missing audit tail is reported as an `audit_error`
+            // field on the SUCCESS result — never as `isError`, which
+            // spec §2 scopes to refusal/validation/gate-denial and
+            // which, rendered over landed bytes, is the both-halves
+            // FAIL spec §8 pins. When the audit landed the success
+            // shape is byte-identical to before: no `audit_error` key.
+            let audit_error =
+                crate::tools::ticks::audit_write(&root, &server.session_id, "append_signoff").err();
+            let mut result = json!({
+                "appended": true,
+                "path": root.join("signoff.md").display().to_string(),
+                "entry": line,
+            });
+            if let Some(err) = audit_error {
+                if let Some(object) = result.as_object_mut() {
+                    object.insert("audit_error".to_string(), json!(err));
+                }
+            }
+            HandlerResult::Ok(result)
+        }
         Err(msg) => HandlerResult::Err(msg),
     }
 }
@@ -401,12 +419,26 @@ fn acquire_lock(root: &Path, session: &str) -> Result<LockToken, String> {
             }
             // Someone else holds it.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                if lock_age(&path).is_some_and(|age| age >= STALE_AFTER) {
-                    // Stale: the holder has been silent for STALE_AFTER.
-                    // Take over server-side (spec §2) — no budget spent
-                    // waiting on a dead holder.
-                    let _ = std::fs::remove_file(&path);
-                    continue;
+                // F2 (signoffs/review_Wave4OKF.md 2b): age-then-remove
+                // unconditionally is a TOCTOU — two acquirers that both
+                // measured the same stale record could each remove
+                // whatever stood at the path, so the slower one deleted
+                // the faster one's FRESH lock and both believed they held
+                // the mutex. The takeover is now identity-checked: the
+                // removal only ever removes the very record it measured.
+                if let Some(stale) = measure_stale_lock(&path) {
+                    if remove_stale_lock(&path, &stale) {
+                        // Stale: the holder has been silent for
+                        // STALE_AFTER and the file still records that
+                        // dead holder — take over (spec §2), no budget
+                        // spent waiting on a dead holder.
+                        continue;
+                    }
+                    // The re-check refused: a successor took the stale
+                    // lock over between the measurement and this
+                    // removal. We release our claim on that path (their
+                    // lock stays untouched) and re-enter the bounded
+                    // retry below.
                 }
                 if attempts >= MAX_ACQUIRE_ATTEMPTS {
                     return Err(format!(
@@ -450,6 +482,84 @@ fn lock_age(path: &Path) -> Option<Duration> {
         Err(_) => None,
     }
 }
+
+/// The identity of the lock file as measured STALE (F2,
+/// signoffs/review_Wave4OKF.md 2b): the published `pid`/`nonce`/`epoch`
+/// fields — the same fields `release_lock` identity-checks — the full
+/// contents, and the stat facts (mtime, size, inode) at measurement
+/// time. `None` fields cover the empty/corrupt file whose age came from
+/// the mtime fallback (its measured identity is then its stat alone).
+struct StaleLock {
+    pid: Option<String>,
+    nonce: Option<String>,
+    epoch: Option<String>,
+    contents: Option<String>,
+    mtime: Option<SystemTime>,
+    size: u64,
+    ino: u64,
+}
+
+/// Measure the holder's silence AND its identity in one step: `Some`
+/// only when the file exists, its age (the `lock_age` rule: published
+/// `epoch`, else mtime) is at least `STALE_AFTER`, and its stat facts
+/// could be recorded. `None` means FRESH or unmeasurable — the caller
+/// waits (the safe default).
+fn measure_stale_lock(path: &Path) -> Option<StaleLock> {
+    let age = lock_age(path)?;
+    if age < STALE_AFTER {
+        return None;
+    }
+    let meta = std::fs::metadata(path).ok()?;
+    let contents = std::fs::read_to_string(path).ok();
+    let field = |name: &str| contents.as_deref().and_then(|c| parse_lock_field(c, name));
+    Some(StaleLock {
+        pid: field("pid"),
+        nonce: field("nonce"),
+        epoch: field("epoch"),
+        contents,
+        mtime: meta.modified().ok(),
+        size: meta.len(),
+        ino: meta.ino(),
+    })
+}
+
+/// The identity-safe takeover (F2): re-read the record and re-stat the
+/// file, and remove it ONLY while every identity field (pid/nonce/
+/// epoch) and every stat fact (mtime/size/inode) still matches what was
+/// measured stale — a mismatch means someone took the lock over first,
+/// and removing then would delete THEIR fresh lock. Returns whether the
+/// removal was ours to make. Residual window: between this verified
+/// re-read and the `remove_file` itself microseconds remain open for a
+/// successor to land — recorded as the accepted residual by the review
+/// (F2); fully closing it needs rename-based takeover, out of this
+/// round's scope.
+fn remove_stale_lock(path: &Path, stale: &StaleLock) -> bool {
+    let now_contents = std::fs::read_to_string(path).ok();
+    if now_contents != stale.contents {
+        return false;
+    }
+    let text = now_contents.as_deref().unwrap_or("");
+    if [
+        ("pid", &stale.pid),
+        ("nonce", &stale.nonce),
+        ("epoch", &stale.epoch),
+    ]
+    .iter()
+    .any(|(name, want)| parse_lock_field(text, name) != **want)
+    {
+        return false;
+    }
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime
+    {
+        return false;
+    }
+    std::fs::remove_file(path).is_ok()
+}
+
 
 /// Parse a whitespace-delimited `key=value` field from lock contents.
 fn parse_lock_field(contents: &str, key: &str) -> Option<String> {
@@ -623,4 +733,69 @@ fn civil_from_days(d: i64) -> (i64, u32, u32) {
         (y + 1, mp - 9) // January/February belong to the next year
     };
     (y, month as u32, day as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plant(dir: &Path, pid: u32, nonce: u64, epoch: u64, session: &str) -> std::path::PathBuf {
+        let locks = dir.join(".locks");
+        std::fs::create_dir_all(&locks).unwrap();
+        let path = locks.join(LOCK_NAME);
+        std::fs::write(
+            &path,
+            format!("pid={pid} nonce={nonce} epoch={epoch} session={session}\n"),
+        )
+        .unwrap();
+        path
+    }
+
+    /// F2 (signoffs/review_Wave4OKF.md 2b), the review's race replayed
+    /// at the helper level, deterministically: acquirer B measures the
+    /// dead holder's record STALE; acquirer A takes the lock over (a
+    /// FRESH record appears at the same path) BEFORE B's removal. The
+    /// pre-fix code removed whatever stood at the path on the strength
+    /// of B's stale read alone — deleting A's fresh lock and letting
+    /// both hold the mutex. The identity-checked takeover must refuse
+    /// A's lock and leave it on disk.
+    #[test]
+    fn stale_takeover_never_removes_a_successors_fresh_lock() {
+        let dir = std::env::temp_dir().join(format!(
+            "exomem-f2-signoff-{}-takeover",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
+        // B measures the dead holder: silent for STALE_AFTER+1.
+        let path = plant(&dir, 1, 1, now - STALE_AFTER.as_secs() - 1, "s-dead");
+        let stale = measure_stale_lock(&path).expect("the dead holder must measure as stale");
+
+        // A takes over in the meantime: the SAME path now carries a
+        // fresh record that B never measured.
+        std::fs::write(&path, format!("pid=2 nonce=2 epoch={now} session=s-successor\n")).unwrap();
+
+        assert!(
+            !remove_stale_lock(&path, &stale),
+            "a record that is not the one measured stale is never removed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the successor's lock survives the refused takeover"),
+            format!("pid=2 nonce=2 epoch={now} session=s-successor\n"),
+            "the successor's fresh lock is left byte-identical"
+        );
+        // A fresh record is not even measurable as stale: the caller
+        // re-enters the bounded retry rather than racing again.
+        assert!(measure_stale_lock(&path).is_none(), "a fresh lock never re-enters the takeover path");
+
+        // The legitimate takeover still works: the file B measured is
+        // still the file on disk — removal is ours to make.
+        let path = plant(&dir, 3, 3, now - STALE_AFTER.as_secs() - 1, "s-dead-again");
+        let stale = measure_stale_lock(&path).expect("the dead holder must measure as stale");
+        assert!(remove_stale_lock(&path, &stale), "the measured stale record IS removable");
+        assert!(!path.exists(), "the takeover removed exactly the file it measured");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

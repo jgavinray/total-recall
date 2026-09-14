@@ -19,9 +19,15 @@
 //! - the §4 gate: `initialize` does NOT grant the handshake; the
 //!   `attempted_write_before_handshake` counter counts gate refusals and
 //!   nothing else
-//! - the wave-2 `tools/list` shape: the merged registry carries the
-//!   handshake pair (read_signoff, then append_signoff) with the pinned
-//!   spec §3 schemas
+//! - the merged `tools/list` registry: exactly the six implemented tools
+//!   by name, the gate-opener advertised first, with the pinned spec §3
+//!   schemas
+//! - the frame-level MCP result envelope: success arrives as ONE text
+//!   item holding the serialized handler JSON (no `isError`, no raw-field
+//!   leak), refusals keep the pinned `isError` + content shape — and a
+//!   refused call leaves the root byte-untouched (spec §8 both-halves rule)
+//! - `initialize` carries the MCP-mandatory `serverInfo` and the
+//!   tools-only capability surface
 //! - `serve_stdio` end-to-end: frames out on stdout, notifications silent,
 //!   clean EOF -> exit 0 (spawns the real binary; this is the one test
 //!   coupled to the sibling's `src/main.rs` landing)
@@ -205,9 +211,19 @@ fn gate_opens_when_handshaken_and_counter_stays_put() {
         v["result"]["isError"].is_null(),
         "post-handshake: a success result, never an error object and no refusal"
     );
-    assert_eq!(v["result"]["appended"], true, "the wave-2 success shape");
+    // The MCP success envelope (built at dispatch, spec §2): exactly ONE
+    // text item holding the serialized handler JSON. Decode it, THEN pin
+    // the wave-2 success shape carried inside.
+    let content = v["result"]["content"]
+        .as_array()
+        .expect("success carries a content array");
+    assert_eq!(content.len(), 1, "exactly ONE text item");
+    assert_eq!(content[0]["type"], "text");
+    let payload: Value = serde_json::from_str(content[0]["text"].as_str().unwrap())
+        .expect("the text item is the serialized handler result");
+    assert_eq!(payload["appended"], true, "the wave-2 success shape");
     assert!(
-        v["result"]["entry"].as_str().unwrap().contains("Worker signoff (probe)"),
+        payload["entry"].as_str().unwrap().contains("Worker signoff (probe)"),
         "the echoed entry carries the fixed token"
     );
     // The append really happened on disk, stamped with the process-local
@@ -249,21 +265,37 @@ fn gate_refusals_are_counted_per_session() {
 }
 
 #[test]
-fn tools_list_wave2_registry_carries_the_handshake_pair() {
-    // Wave 2 merges the registry: the tool modules own the shapes and
-    // the dispatch entries (read_signoff first, then append_signoff —
-    // the handshake order); the free-function builder (contract module
-    // API) is exercised here while the rest of this file uses
-    // Server::new_server.
+fn tools_list_registry_carries_the_full_ten_tool_set() {
+    // The merged registry: every implemented module's tools, pinned by
+    // EXACT name set — the full spec §3 ten-tool surface (the handshake
+    // pair, the wave-3 four, and the wave-4 four). The free-function
+    // builder (contract module API) is exercised here while the rest of
+    // this file uses Server::new_server.
     let mut s = rpc::new_server(&rpc_root("tools-list"));
     let out = rpc::handle_frame(&mut s, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
         .unwrap();
     let v: Value = serde_json::from_str(&out).unwrap();
     let tools = v["result"]["tools"].as_array().expect("tools must be an array");
+    let mut names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("every tool is named"))
+        .collect();
+    names.sort_unstable();
     assert_eq!(
-        tools.len(),
-        2,
-        "the merged registry carries exactly the handshake pair"
+        names,
+        [
+            "append_signoff",
+            "claim_orchestrator",
+            "last_tick",
+            "log_tick",
+            "read_signoff",
+            "recall",
+            "session_compliance",
+            "write_brief",
+            "write_dayfile",
+            "write_warm_start",
+        ],
+        "the merged registry carries exactly the spec §3 ten tools"
     );
     assert_eq!(
         tools[0]["name"], "read_signoff",
@@ -342,4 +374,114 @@ fn serve_stdio_emits_frames_keeps_notifications_silent_and_exits_zero() {
     assert_eq!(init["result"]["protocolVersion"], "2026-07-28");
     assert!(lines[1].contains("-32601"), "unknown method frame: {}", lines[1]);
     assert!(lines[2].contains("-32700"), "parse-error frame: {}", lines[2]);
+}
+
+#[test]
+fn initialize_result_carries_serverinfo_and_tools_only_capabilities() {
+    // MCP makes `serverInfo` mandatory on the initialize result; the
+    // capability surface stays tools-only — this server advertises no
+    // resources (spec §3: absence IS the api).
+    let mut s = fresh_server("init-info");
+    let out = rpc::handle_frame(
+        &mut s,
+        r#"{"jsonrpc":"2.0","id":"si","method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{}}}"#,
+    )
+    .unwrap();
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["result"]["serverInfo"]["name"], "exomem-mcp");
+    assert_eq!(v["result"]["serverInfo"]["version"], "0.3.0");
+    assert!(
+        v["result"]["capabilities"]["tools"].is_object(),
+        "the tools capability must be present"
+    );
+    assert!(
+        v["result"]["capabilities"].get("resources").is_none(),
+        "no MCP resources surface"
+    );
+}
+
+#[test]
+fn newly_reachable_tools_refuse_before_handshake_in_the_pinned_envelope() {
+    // The four wave-3 tools the registry now actually reaches (they were
+    // implemented but never advertised/dispatchable). Each module runs
+    // the uniform gate (spec §4) BEFORE argument validation, so even
+    // empty arguments draw the exact pinned refusal — and spec §8's
+    // both-halves rule pins BOTH the refusal shape AND the absent side
+    // effect (a fresh root stays byte-empty).
+    let mut s = fresh_server("newtools-refusal");
+    assert!(
+        std::fs::read_dir(&s.root).unwrap().next().is_none(),
+        "a fresh configured root starts EMPTY"
+    );
+    for (id, name) in [
+        (101u64, "claim_orchestrator"),
+        (102, "write_dayfile"),
+        (103, "write_brief"),
+        (104, "write_warm_start"),
+    ] {
+        let frame = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":{{\"name\":\"{name}\",\"arguments\":{{}}}}}}"
+        );
+        let out = rpc::handle_frame(&mut s, &frame).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(
+            v["error"].is_null(),
+            "{name}: a refusal is a normal result, never a JSON-RPC error frame"
+        );
+        assert_eq!(v["id"], id, "{name}: the id must round-trip");
+        assert_eq!(
+            v["result"]["content"][0]["text"],
+            "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.",
+            "{name}: the refusal must carry the exact shared-gate rule text (gate::HANDSHAKE_REFUSAL_MESSAGE)"
+        );
+        assert_eq!(
+            s.attempted_write_before_handshake.get(&s.session_id),
+            Some(&(id - 100)),
+            "{name}: the refused attempt must count at the gate"
+        );
+    }
+    // Side effect ABSENT: every refusal happened before any disk touch —
+    // the root is exactly as empty as it started.
+    assert!(
+        std::fs::read_dir(&s.root).unwrap().next().is_none(),
+        "refused calls must leave the root exactly as empty as it started"
+    );
+}
+
+#[test]
+fn claim_orchestrator_success_arrives_as_one_serialized_text_item() {
+    // The success half at the frame level for a newly reachable tool:
+    // ONE text item holding the handler's serialized JSON, NO isError,
+    // and no raw handler field leaking beside the envelope (the raw
+    // HandlerResult shape lives at module level only).
+    let mut s = fresh_server("newtools-claim");
+    s.handshaken.insert(s.session_id.clone(), true);
+    let out = rpc::handle_frame(
+        &mut s,
+        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"claim_orchestrator","arguments":{}}}"#,
+    )
+    .unwrap();
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert!(v["result"]["isError"].is_null(), "success carries no isError");
+    let content = v["result"]["content"]
+        .as_array()
+        .expect("success carries a content array");
+    assert_eq!(content.len(), 1, "exactly ONE text item");
+    assert_eq!(content[0]["type"], "text");
+    assert!(
+        v["result"].get("claimed").is_none(),
+        "raw handler fields must not leak beside the envelope"
+    );
+    let payload: Value = serde_json::from_str(content[0]["text"].as_str().unwrap())
+        .expect("the text item is the serialized handler result");
+    assert_eq!(payload["claimed"], true);
+    assert!(payload["token"].as_str().unwrap().starts_with("tok-"));
+    // The claim really landed on disk: the file is the truth (spec §5).
+    let claim_files: Vec<String> = std::fs::read_dir(s.root.join(".claims"))
+        .expect("the fresh claim wrote .claims/orchestrator-<date>")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("orchestrator-"))
+        .collect();
+    assert_eq!(claim_files.len(), 1, "exactly one claim file");
 }

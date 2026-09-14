@@ -616,3 +616,138 @@ fn tool_shape_is_spec_verbatim_and_dispatch_is_wired() {
         "the handler stamps the process-local session id"
     );
 }
+
+/// F1 (signoffs/review_Wave4OKF.md 2d) — the review's MAJOR: an audit
+/// tail that cannot land used to render as `isError` while the signoff
+/// line sat on disk, the exact both-halves FAIL spec §8 declares. The
+/// write HAS landed, so the result must be a SUCCESS carrying the
+/// missing tail as `audit_error`. Pre-fix, this call returned
+/// `HandlerResult::Err` and the Ok-arm panic below fired.
+///
+/// The audit path is made to fail deterministically on this box:
+/// `.audit` is planted as a PLAIN FILE, so `append_audit`'s
+/// `create_dir_all(.audit)` can never produce the jsonl.
+#[test]
+fn audit_tail_failure_lands_the_line_and_reports_audit_error() {
+    let dir = seeded_root("f1-audit-tail");
+    std::fs::write(dir.join(".audit"), "not a directory — the audit tail must fail to land").unwrap();
+    let mut s = handshaken_server(&dir, "probe");
+
+    match signoff_append::append_signoff(&mut s, "probe", &full_args()) {
+        HandlerResult::Ok(v) => {
+            assert_eq!(v["appended"], json!(true), "the landed write reports success: {v}");
+            assert!(
+                v["audit_error"].as_str().is_some_and(|e| !e.is_empty()),
+                "the missing tail is reported on the success result: {v}"
+            );
+        }
+        HandlerResult::Err(msg) => panic!(
+            "a landed write with a failed audit tail must NOT surface as isError (spec §8 \
+             both-halves): {msg}"
+        ),
+    }
+    let text = std::fs::read_to_string(dir.join("signoff.md")).expect("the main write landed");
+    assert!(
+        text.lines().any(|l| l.starts_with("Worker signoff (probe)")),
+        "the signoff line is on disk while the result says success"
+    );
+    assert!(
+        !dir.join(".audit").is_dir(),
+        "the planted file was not silently converted — the failure is real"
+    );
+}
+
+/// The other half of F1: with a healthy audit the success shape is
+/// byte-identical to the pre-F1 result — the `audit_error` key does not
+/// exist at all (existing frame pins depend on this).
+#[test]
+fn a_healthy_append_success_carries_no_audit_error_key() {
+    let dir = seeded_root("f1-healthy");
+    let mut s = handshaken_server(&dir, "probe");
+    match signoff_append::append_signoff(&mut s, "probe", &full_args()) {
+        HandlerResult::Ok(v) => {
+            assert_eq!(v["appended"], json!(true));
+            assert!(v.get("audit_error").is_none(), "healthy success carries no audit_error: {v}");
+            let mut keys: Vec<String> = v
+                .as_object()
+                .expect("result is an object")
+                .keys()
+                .map(|k| k.to_string())
+                .collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                ["appended".to_string(), "entry".to_string(), "path".to_string()],
+                "the success shape without an audit failure is unchanged"
+            );
+        }
+        HandlerResult::Err(msg) => panic!("a healthy append must succeed: {msg}"),
+    }
+    // And the audit trail really landed (whatever the root's local
+    // date names it), so the absence above is not an artifact of the
+    // audit never running.
+    let trail = read_single_audit_line(&dir);
+    assert!(
+        trail.contains("\"tool\":\"append_signoff\""),
+        "the healthy audit entry landed: {trail}"
+    );
+}
+
+/// F2 (signoffs/review_Wave4OKF.md 2b) — the takeover half of the
+/// mutual-exclusion guarantee: a lock file planted with a FRESH record
+/// is never removed by the stale branch. The call must exhaust the
+/// bounded retry, end in the pinned already-exists refusal, and leave
+/// the holder's lock file on disk, byte-identical. (The deterministic
+/// replay of the review's A/B interleaving lives with the fix in
+/// `src/tools/signoff_append.rs`'s unit test.)
+#[test]
+fn fresh_record_never_taken_over_bounded_retry_refuses() {
+    let dir = seeded_root("f2-stale-branch");
+    let mut s = handshaken_server(&dir, "probe");
+    let locks_dir = dir.join(".locks");
+    std::fs::create_dir_all(&locks_dir).unwrap();
+    let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let planted = format!(
+        "pid={} nonce=90210 epoch={epoch} session=s-live-holder\n",
+        std::process::id() + 7
+    );
+    std::fs::write(locks_dir.join("signoff.md.lock"), &planted).unwrap();
+
+    match signoff_append::append_signoff(&mut s, "probe", &full_args()) {
+        HandlerResult::Err(msg) => assert!(
+            msg.contains("held by another writer"),
+            "the exhausted retry ends in the pinned already-exists refusal: {msg}"
+        ),
+        HandlerResult::Ok(_) => panic!("the stale branch removed a FRESH holder's lock and wrote"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(locks_dir.join("signoff.md.lock"))
+            .expect("the fresh lock file is still present"),
+        planted,
+        "the fresh record is byte-identical — the stale branch never touched it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("signoff.md")).unwrap(),
+        SEED,
+        "refusal wrote zero bytes"
+    );
+}
+
+/// The one line in today's audit trail: the `.audit/` directory holds
+/// one `<local-date>.jsonl` per day and this root saw exactly one
+/// mutating write. The file NAME is the root's local date (writer's
+/// rule), so the trail is enumerated, never date-guessed.
+fn read_single_audit_line(dir: &std::path::Path) -> String {
+    let rd = std::fs::read_dir(dir.join(".audit"))
+        .expect("the healthy audit path produced its jsonl file");
+    let mut lines: Vec<String> = Vec::new();
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".jsonl") {
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            lines.extend(text.lines().map(|l| l.to_string()));
+        }
+    }
+    assert_eq!(lines.len(), 1, "exactly the append's own audit entry: {lines:?}");
+    lines.pop().unwrap()
+}

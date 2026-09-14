@@ -340,7 +340,29 @@ fn write_dayfile_wrong_token_refused_claim_unchanged_then_correct_token_succeeds
     }
     assert_eq!(std::fs::read(&cf).unwrap(), before, "the refusal must leave the claim file byte-identical");
     assert!(!dir.join(format!("{d}.md")).exists(), "no day file may be created");
-    assert!(!dir.join(".locks").exists(), "the token gate runs BEFORE any lock is acquired");
+    // The token gate runs BEFORE any lock is acquired: no day-file lock
+    // may exist, and the refused write must append NO audit entry — only
+    // the successful claim's own entry is on the trail. (The `.locks/`
+    // dir itself may exist, emptied, from the claim's acquire/release —
+    // it is the LOCK FILE and the audit line that the §8 both-halves
+    // rule pins absent, not the directory.)
+    if let Ok(rd) = std::fs::read_dir(dir.join(".locks")) {
+        for entry in rd {
+            let name = entry.unwrap().file_name();
+            assert_ne!(
+                name.to_str().unwrap(),
+                format!("{d}.md.lock"),
+                "the token gate runs BEFORE any lock is acquired"
+            );
+        }
+    }
+    let audit = dir.join(".audit").join(format!("{d}.jsonl"));
+    let trail = std::fs::read_to_string(&audit).expect("the claim's own audit entry exists");
+    assert_eq!(
+        trail.lines().count(),
+        1,
+        "the refused write appended no audit entry — only the claim's own"
+    );
 
     // The claim survives the refusal: the correct token still opens the gate.
     match claims::write_dayfile(&mut s, "probe", &json!({"content": "body", "orchestrator_token": tok})) {

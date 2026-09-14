@@ -1,13 +1,13 @@
 ---
 title: Exo Memory MCP Server — Spec
 type: spec
-status: DRAFT v0.2 (2026-09-13)
+status: v0.3 (2026-09-14)
 author: orchestrated assistant for the human
 tags: [exomemory, mcp, memory, omp, agentic-engineering]
-updated: 2026-09-13
+updated: 2026-09-14
 ---
 
-# Exo Memory MCP Server — Spec v0.2
+# Exo Memory MCP Server — Spec v0.3
 
 Single-binary MCP server that turns the side-band memory pattern — markdown files under a **configured memory root** (default `~/dev/exomemory/`, §2 Configuration) — into an enforced API for the buckets it owns. Drafted 2026-09-13; v0.2 reconciles v0.1 with the shipped enforcement plane and the real on-disk format; the build is **authorized** by the human 2026-09-13 (§12).
 
@@ -31,7 +31,7 @@ Mapping — only the rules the server OWNS (each rule marked OWNED here, everyth
 ## 2. Architecture
 
 - **Single binary — Rust, directly** (human ruling 2026-09-13: "the implementation of this is to be rust NOT python"; edition **2021**) — one Rust binary implementing MCP JSON-RPC 2.0 over stdio (newline-delimited), logs to stderr; no interim reference-implementation phase. Honest minimal dependency set: **Rust std + serde_json** (JSON-RPC serialization — unavoidable), and nothing else. Protocol shapes (fetched from the MCP specification, 2026-09-13):
-  - `initialize` → `protocolVersion: 2026-07-28` (the current specification revision at fetch time; the server also accepts earlier revisions it implements), `capabilities: {"tools": {}}`, then `tools/list` / `tools/call`.
+  - `initialize` → `protocolVersion: 2026-07-28` (the current specification revision at fetch time; the server also accepts earlier revisions it implements), `capabilities: {"tools": {"listChanged": false}}` — tools-only: the server exposes no resources and no prompts, and never emits `notifications/tools/list_changed` (the flag pins the semantic default explicitly), then `tools/list` / `tools/call`.
   - **Unknown tool name** → JSON-RPC error **`-32602`** (Invalid params) — *not* `-32601`, which names an unknown *method*, not an unknown tool.
   - **Tool execution failure** (refusal, validation error, gate denial) → a normal JSON-RPC **result** carrying `isError: true` plus a `content` array — never a JSON-RPC `error` object. §3/§4/§8 examples follow this shape.
 - **Storage layout** — every path in the table below is **relative to the configured memory root** (see the Configuration bullet under this table). The `Exists` column is a **dated observation (2026-09-13) of the reference deployment at the default root** — it is not a requirement: a fresh configured root simply starts empty and every path is created-on-first-write.
@@ -48,7 +48,10 @@ Mapping — only the rules the server OWNS (each rule marked OWNED here, everyth
 | `.claims/orchestrator-<date>` | claim files (`O_CREAT\|O_EXCL`), the claim **source of truth** (§5) | `claim_orchestrator` / server housekeeping | created-on-first-write |
 | `.audit/YYYY-MM-DD.jsonl` | append-only audit log (the only other append path) | all mutating tools, post-handshake | created-on-first-write |
 | `.locks/` | `O_CREAT\|O_EXCL` lock files — the append mutex, incl. the signoff lock file | internal | created-on-first-write |
+| `.index/` | **DERIVED CACHE** — per-file fingerprint manifest + parsed-entry lists over the server's buckets; rebuildable from disk at any time; never source-of-truth; versioned; written under `.locks/index.lock` with atomic rename | internal housekeeping (not a tool) | created-on-first-write |
 | `.state/` | init fingerprint, incl. the timezone record used by the startup check (§2 timezone) | internal | created-on-first-write |
+
+`.index/` is a derived cache, not a bucket: it may be deleted at any time and recall rebuilds it from the markdown. No tool reads or writes it; it is housekeeping in the sense of §3 EXCLUSIONS.
 
 - **Configuration** — the memory root is a **configured value, not a baked-in path**. Precedence: 1) `--root <path>` CLI flag; 2) `EXOMEMORY_DIR` env (the guard's own variable — `exoDir()`, exomemory-signoff-guard.ts:135–138; the legacy alias `EXO_DIR` is accepted, and the server refuses loudly at startup if both env names are set to different paths); 3) config file `~/.config/exomemory/config.toml`, key `root`; 4) default `~/dev/exomemory/`. The default is a **convenience for the reference deployment, NOT part of the contract** — any directory that satisfies the layout of this section is a valid root, and nothing in this spec may assume one location.
 
@@ -66,7 +69,7 @@ Mapping — only the rules the server OWNS (each rule marked OWNED here, everyth
 | `claim_orchestrator` | `{date}` | handshake | token (or the caller's retained token), or names current holder |
 | `write_brief` | `{worker, brief}` | today's claim token | write `briefs/<worker>.md`, archive superseded (§3 collision-free name) |
 | `write_warm_start` | `{content, orchestrator_token}` | today's claim token | rewrite ONLY the warm-start block + History; worker-signoff bytes verbatim |
-| `recall` | `{query, scope?, workflow?, since?}` | — | dated excerpts + paths |
+| `recall` | `{query, scope?, workflow?, since?}` | — | dated excerpts + paths; may use the internal derived index to narrow candidates, but every excerpt is verified against the live file and stamped with its mtime |
 | `log_tick` | `{check, result}` | handshake | append tick to audit jsonl |
 | `last_tick` | `{check}` | — | latest tick; loud error when registered-but-silent |
 | `session_compliance` | `{}` | — | audit-derived compliance report (admin/debug) |
@@ -208,7 +211,7 @@ Example result:
 ```json
 {
   "name": "recall",
-  "description": "Searches the known memory buckets and returns dated excerpts with paths. Every result carries a timestamp/date — no undated facts (perishable-facts rule: facts are perishable, re-verify anything older than its natural rate of change). Facts come from recall() results or files, never from context memory. Path-confined: searches only the fixed buckets under the configured root (§2); the input carries no path parameter and any query-derived path must canonicalize inside those buckets.",
+  "description": "Searches the known memory buckets and returns dated excerpts with paths. Every result carries a timestamp/date — no undated facts (perishable-facts rule: facts are perishable, re-verify anything older than its natural rate of change). Facts come from recall() results or files, never from context memory. Path-confined: searches only the fixed buckets under the configured root (§2); the input carries no path parameter and any query-derived path must canonicalize inside those buckets. The server may maintain an internal derived index over the buckets to narrow candidates; the index is never authoritative — every returned excerpt is re-read from the live file and its `ts` is that file's mtime. A stale, corrupt, or version-mismatched index is rebuilt, never served.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -273,7 +276,7 @@ Silent check example (tool-side failure shape per §2 — result + `isError`, ne
 ```
 
 ### EXCLUSIONS — the absent API (by design, never to be added)
-No `edit_file` / `update_file`, no `delete_file` / remove, no generic `write_file` / overwrite, no `rename` / `move`, no arbitrary-path read (only `recall`, path-confined, over the fixed buckets), no shell/exec, no tool touching `wiki/`, `inbox/`, `topics/`, or `signoffs/` (§10). Server housekeeping (stale-claim rotation into `.claims/` archive, tmp files) is internal implementation, not API surface — the no-delete rule constrains the tools, not the server's own disk bookkeeping (§5). **Absence IS the api**: a forbidden act has no tool, so it cannot be called, so it cannot be argued with.
+No `edit_file` / `update_file`, no `delete_file` / remove, no generic `write_file` / overwrite, no `rename` / `move`, no arbitrary-path read (only `recall`, path-confined, over the fixed buckets), no shell/exec, no tool touching `wiki/`, `inbox/`, `topics/`, or `signoffs/` (§10). Server housekeeping (stale-claim rotation into `.claims/` archive, tmp files, the derived `.index/` cache) is internal implementation, not API surface — the no-delete rule constrains the tools, not the server's own disk bookkeeping (§5). **Absence IS the api**: a forbidden act has no tool, so it cannot be called, so it cannot be argued with.
 
 ## 4. Handshake enforcement (server-side, harness-independent)
 
@@ -350,7 +353,7 @@ Smoke-test via JSON-RPC over stdio against throwaway configured-root fixtures. E
 1. **append_signoff before read_signoff** → refusal per §4 shape; `signoff.md` bytes unchanged (no appended line).
 2. **log_tick before read_signoff** → refused (uniform gate, §4); `.audit/<date>.jsonl` absent or byte-identical.
 3. **write_dayfile without token** → refused (`no valid orchestrator_<date> claim — single-writer dayfile`); the day file is not created/modified. Same pair for **write_brief / write_warm_start without token**: `briefs/` and the `signoff.md` warm block unchanged.
-4. **recall on a seeded fixture** → result is NON-EMPTY (fixture seeds ≥1 hit per assertion; a vacuous empty result set FAILS); every hit carries `ts` + `path` (no undated facts); the `workflow` filter separates two workflows seeded on the same day; **path confinement** — queries/scope values crafted to escape the fixed buckets (traversal, absolute paths) are refused and read nothing outside the configured root's buckets.
+4. **recall on a seeded fixture** → result is NON-EMPTY (fixture seeds ≥1 hit per assertion; a vacuous empty result set FAILS); every hit carries `ts` + `path` (no undated facts); the `workflow` filter separates two workflows seeded on the same day; **path confinement** — queries/scope values crafted to escape the fixed buckets (traversal, absolute paths) are refused and read nothing outside the configured root's buckets. Both the non-vacuity and the path-confinement assertions hold **whether or not the derived `.index/` cache is present** (tests 13–17).
 5. **concurrent appends N=10 (one process)** → ten racing `append_signoff` calls: all 10 entries intact, each parses to the fixed line format, no interleave.
 6. **server restart between handshake and write** → after restart, the gated call refuses until `read_signoff` re-runs (handshake is process-local); once re-handshaked, the previously claimed token still validates (claims are disk truth, §5).
 7. **two server processes on one configured root** → concurrent appends through BOTH processes serialize under the shared `.locks/` lock-file protocol (N=2×10 entries all intact, no interleave); a claim created by process A is honored by process B from disk.
@@ -359,6 +362,11 @@ Smoke-test via JSON-RPC over stdio against throwaway configured-root fixtures. E
 10. **orchestrator-death re-claim** → same `session_id` re-claims after simulated death/restart and receives the SAME token from disk; a different session is refused with `holder` + reason and the claim file is byte-identical afterward.
 11. **brief archive collision** → two `write_brief` calls for one worker on one day produce TWO distinct archives under `briefs/<worker>-<superseded-date>T<HHMMSS>Z.md` (second-granularity UTC stamps of the superseded content); no archive overwritten.
 12. **session_compliance** → a deliberately non-compliant scripted session (write-first, handshake-late) is flagged: `attempted_write_before_handshake: true` (gate-observable — the refused attempt, not a write that never lands), refused count = expected.
+13. **index rebuild on direct edit** → seed a bucket, run `recall` (builds the index), then edit the file directly (change mtime/size), run `recall` again → the new line is found; the index was invalidated. Asserts disk-is-truth over the cache.
+14. **stale/corrupt index never served as fact** → corrupt or truncate `.index/`, run `recall` → it rebuilds (or fails loud), and every excerpt matches the live file, not the corrupt index.
+15. **two processes, one root, one index** → process A builds the index; process B edits a bucket; process A's `recall` re-validates and finds the new content (no divergence served).
+16. **index never authoritative** → delete `.index/` entirely, run `recall` → results are identical (rebuilt from disk).
+17. **path confinement with the index** → a query/scope crafted to escape the buckets is refused and reads nothing outside the configured root's buckets (extends test 4).
 
 ## 9. Prior art — reuse decision (DECIDED: greenfield)
 
@@ -404,6 +412,7 @@ The Rust binary (edition 2021; greenfield, §9; deps: Rust std + serde_json per 
 - (answered 2026-09-13, human ruling — configurable root) there is no canonical box path: each deployment configures its own root (§2 Configuration), and a root shared across boxes is valid provided every writer points at the same configured value and TZ (§2's single-TZ startup rule already refuses the wrong answer). The remaining choice is only which box *runs* the server — that is deployment, not spec.
 - (decided 2026-09-13, human ruling — fourth round) reuse: **DECIDED greenfield** (§9); GPL-2.0 rules out reuse — the new server inherits nothing from total-recall.
 - (decided 2026-09-13, fifth-round Rust ruling) recall search: **DECIDED substring/regex search over the markdown buckets** — a bounded, line-scoped, grep-like search (case-insensitive substring + an optional regex mode), **no SQLite, no FTS5, no embeddings**, and explicitly **no third-party search dependency**: a greenfield stdlib-only Rust binary has no SQLite, so the earlier FTS5/keyword decision (taken under the abandoned reference-phase assumption) is superseded. Revisit only if queries become conceptual and the corpus outgrows substring/regex — at which point adding rusqlite + FTS5 is a deliberate dependency decision, not the default.
+- (decided 2026-09-14, OKF derived-index round) recall indexing: **DECIDED derived internal index** — a fingerprint manifest + parsed-entry lists over the server's buckets, std + serde_json only, never source-of-truth, validated on every recall and rebuilt on mismatch; no new tool, no new dependency, no frontmatter on server-owned buckets. Revisit only if the corpus outgrows the scan.
 - Whether workers' dedicated `signoffs/signoff_<role>.md` files eventually migrate behind a server tool, or stay permanently on the guard/human path.
 
 ## 14. Changelog — v0.1 → v0.2
@@ -450,3 +459,10 @@ Rust ruling round (2026-09-13) — three human rulings:
 - **R1 — Language:** "the implementation of this is to be rust NOT python" (human ruling, 2026-09-13) — **Rust directly**, edition **2021**, no interim reference-implementation phase; honest minimal dependency set: **Rust std + serde_json** (JSON-RPC serialization — unavoidable) and nothing else; every interim-reference phrasing deleted from §2, §9, §12 and the changelog quotes.
 - **R2 — Concurrency mechanism:** Rust std exposes no BSD-style advisory file lock (the earlier mechanism was inherited from the abandoned reference-phase assumption) — appends serialize on **exclusive `O_CREAT|O_EXCL` lock files under `.locks/`**: acquire with **bounded retry**; a stale lock is **detected by age and taken over server-side**; release = the server **removes its own lock file** at the end of the append. The no-bare-`PIPE_BUF`-atomicity statement above 4096 B stands; the **lock FILE** carries atomicity, size never affects it (§2 concurrency model, §7 collision row).
 - **R3 — Recall search:** the FTS5/keyword decision was taken under the reference-phase assumption; a greenfield stdlib-only Rust binary has **no SQLite**. **DECIDED substring/regex search over the markdown buckets** — bounded, line-scoped, case-insensitive substring + optional regex mode (regex mode selected by a literal `re:` prefix on the query); no SQLite, no FTS5, no embeddings, explicitly no third-party search dependency. Revisit only if queries become conceptual and the corpus outgrows substring/regex — rusqlite + FTS5 would then be a deliberate dependency decision, not the default (§13).
+
+OKF derived-index amendment round (2026-09-14) — human-authorized amendment, drafted from the kaibo verdict (`job-1`, cast `vllm-local`); the gap it closes (no index over the buckets) was confirmed against §3 `recall`, §13 R3 and the §3 EXCLUSIONS housekeeping carve-out:
+- **Recall indexing: DECIDED derived internal index** (§13) — a per-file fingerprint manifest `{path, mtime, size, inode, line-count, format-version}` + parsed-entry lists over the server's owned buckets; **Rust std + serde_json only**, never source-of-truth, validated on every recall and silently rebuilt on mismatch/corruption (a rebuild that cannot run fails LOUD, per the loud-check rule); the on-disk `.index/` is an optional human-inspectable derived report written under `.locks/index.lock` with tmp + atomic rename; the correctness-critical core is in-process memoization; index refresh is post-write best-effort — never inside an append critical section, never altering or blocking an append.
+- The amendment explicitly does **NOT reverse R3 — Recall search** (Rust ruling round above): the search mechanism stays substring/regex over the markdown buckets — the index is a **candidate-narrowing cache, not a search engine**; no SQLite, no FTS5, no embeddings, no new tool (absence IS the api), no MCP resources (capabilities stay tools-only per §2 — reconciled to `{"tools": {"listChanged": false}}` by the F3 line below), no frontmatter on server-owned buckets; every returned excerpt is re-read from the live file and its `ts` is that file's live mtime.
+- Surfaces amended: §2 storage table (`.index/` row + the after-table derived-cache sentence), §3 `recall` Effect + description (description text only — `inputSchema`, params and the scope enum unchanged), §3 EXCLUSIONS (housekeeping sentence extended with the derived `.index/` cache), §8 (tests 13–17 added; test 4 extended: non-vacuity and path confinement hold with or without the index). The `wiki/` / `inbox/` / `topics/` / `signoffs/` exclusions stand unchanged (§10); wiki/ entered no recall scope.
+
+- **Capabilities reconciled (finding F3, combined-diff review `job-2`, cast `vllm-local` @ 2026-09-14):** §2's pinned `initialize` capabilities now read `{"tools": {"listChanged": false}}` — the value the implementation actually ships (`src/rpc.rs:332`, `listChanged` pinned as a boolean by `tests/gate_w1.rs:126`); the server never emits `notifications/tools/list_changed`, so the semantic default was already `false` and the amendment is editorial: the tools-only / no-resources ruling above stands unchanged, only its quoted form was reconciled with the code (the code was NOT touched for this line).

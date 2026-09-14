@@ -2,24 +2,29 @@
 //!
 //! Wave 1 pinned the protocol SEMANTICS: initialize negotiation,
 //! tools/list, tools/call dispatch, the error codes, notification
-//! silence, and the stdio frame loop. Wave 2 merges the tool registry:
-//! the tool shapes and dispatch entries are owned by the tool modules
-//! (`crate::tools::signoff_read`, `crate::tools::signoff_append`), and
-//! `new_server` assembles their `tools()`/`handlers()` entries, adding
-//! nothing of its own. The protocol layer wraps NO handler in
-//! `crate::gate::gate` — gated handlers (e.g. `append_signoff`) run
-//! the gate check and count refused attempts INLINE, and a second wrap
-//! would tick `attempted_write_before_handshake` twice (gate_w3 pins
-//! the exact count). A refused handler is still rendered as a NORMAL
-//! result carrying `isError: true` + a `content` array (spec §2/§4) —
-//! never a JSON-RPC `error` object.
+//! silence, and the stdio frame loop. The registry is merged: the tool
+//! shapes and dispatch entries are owned by the tool modules
+//! (`crate::tools::signoff_read`, `crate::tools::signoff_append`,
+//! `crate::tools::claims`, `crate::tools::briefs`,
+//! `crate::tools::warmstart` — wave 4 appends its modules the same
+//! way), and `new_server` assembles their `tools()`/`handlers()`
+//! entries, adding nothing of its own. The protocol layer wraps NO
+//! handler in `crate::gate::gate` — gated handlers (e.g.
+//! `append_signoff`) run the gate check and count refused attempts
+//! INLINE, and a second wrap would tick
+//! `attempted_write_before_handshake` twice (gate_w3 pins the exact
+//! count). A refused handler is still rendered as a NORMAL result
+//! carrying `isError: true` + a `content` array (spec §2/§4) — never a
+//! JSON-RPC `error` object.
 //!
 //! Pinned semantics (build contract §src/rpc.rs; spec §2 protocol shapes):
 //! - malformed JSON                -> Err frame, code -32700 "parse error"
 //! - valid JSON, invalid request   -> Err frame, code -32600 "invalid request"
 //! - unknown method                 -> Err frame, code -32601
 //! - unknown tool name (tools/call) -> Err frame, code -32602
+//! - handler success                 -> Ok frame, result {content:[{type:"text", text:<serialized handler JSON>}]} — no isError
 //! - handler refusal                 -> Ok frame, result {isError:true, content:[…]}
+//! - unserializable handler value    -> Err frame, code -32603 (server bug, fails loud)
 //! - notification (no `id` member)   -> Ok("") — nothing is ever emitted
 //!
 //! stdout carries protocol frames only (newline-delimited); diagnostics go
@@ -91,10 +96,15 @@ pub type Handler = fn(&mut Server, &Value) -> HandlerResult;
 
 /// What a tool handler reports back to the frame loop.
 ///
-/// `Ok(value)` becomes the JSON-RPC `result`. `Err(msg)` becomes a NORMAL
-/// result carrying `{isError: true, content: [{type:"text", text: msg}]}`
-/// — a refusal is a tool-level outcome, never a JSON-RPC `error` object
-/// (spec §2: "Tool execution failure … -> a normal JSON-RPC result").
+/// `Ok(value)` is wrapped at the tools/call dispatch point ONLY into the
+/// MCP-mandatory success envelope
+/// `{content: [{type:"text", text: serde_json::to_string(value)}]}` — no
+/// `isError` on success (the handlers themselves return these raw values
+/// UNCHANGED; their module-level tests depend on that). `Err(msg)` becomes
+/// a NORMAL result carrying `{isError: true, content: [{type:"text",
+/// text: msg}]}` — a refusal is a tool-level outcome, never a JSON-RPC
+/// `error` object (spec §2: "Tool execution failure … -> a normal
+/// JSON-RPC result").
 pub enum HandlerResult {
     Ok(Value),
     Err(String),
@@ -106,18 +116,43 @@ impl Server {
     /// `config::init_state` touches the disk, and it creates `.state/`
     /// alone).
     pub fn new_server(root: &Path) -> Server {
-        // The merged registry (wave 2): the tool modules own the tool
-        // shapes and the dispatch entries; the protocol layer only
-        // assembles them, in handshake order (read_signoff first, then
-        // append_signoff). `append_signoff`'s handler runs the gate
-        // check and counts refused attempts INLINE (see the module
-        // docs) — do NOT additionally wrap that entry in
-        // `crate::gate::gate`, which would double-count every refusal.
-        let mut tools = crate::tools::signoff_read::tools();
-        tools.extend(crate::tools::signoff_append::tools());
-        let mut handlers = crate::tools::signoff_read::handlers();
-        for (name, handler) in crate::tools::signoff_append::handlers() {
-            handlers.insert(name, handler);
+        // The merged registry: every tool module owns its tool shapes and
+        // its dispatch entries; the protocol layer only assembles the
+        // modules listed here — wiring another module (wave 4: recall,
+        // log_tick/last_tick, session_compliance) is ONE symmetric row of
+        // its `tools()` + `handlers()`. Order is the handshake order: the
+        // ungated gate-opener `read_signoff` is advertised first.
+        // Gated handlers run the gate check and count refused attempts
+        // INLINE (see the module docs) — do NOT additionally wrap these
+        // entries in `crate::gate::gate`, which would double-count every
+        // refusal.
+        let modules: Vec<(Vec<Tool>, HashMap<String, Handler>)> = vec![
+            (
+                crate::tools::signoff_read::tools(),
+                crate::tools::signoff_read::handlers(),
+            ),
+            (
+                crate::tools::signoff_append::tools(),
+                crate::tools::signoff_append::handlers(),
+            ),
+            (crate::tools::claims::tools(), crate::tools::claims::handlers()),
+            (crate::tools::briefs::tools(), crate::tools::briefs::handlers()),
+            (
+                crate::tools::warmstart::tools(),
+                crate::tools::warmstart::handlers(),
+            ),
+            (crate::tools::recall::tools(), crate::tools::recall::handlers()),
+            (crate::tools::ticks::tools(), crate::tools::ticks::handlers()),
+            (
+                crate::tools::compliance::tools(),
+                crate::tools::compliance::handlers(),
+            ),
+        ];
+        let mut tools = Vec::new();
+        let mut handlers: HashMap<String, Handler> = HashMap::new();
+        for (module_tools, module_handlers) in modules {
+            tools.extend(module_tools);
+            handlers.extend(module_handlers);
         }
         Server {
             root: root.to_path_buf(),
@@ -220,7 +255,26 @@ pub fn handle_frame(server: &mut Server, frame: &str) -> Result<String, String> 
                             .and_then(|params| params.get("arguments").cloned())
                             .unwrap_or_else(|| json!({}));
                         match handler(server, &arguments) {
-                            HandlerResult::Ok(result) => Ok(result),
+                            // Success: MCP mandates a `content` array on
+                            // every tools/call result — the handler's raw
+                            // JSON value travels as ONE text item holding
+                            // its serialization. The envelope is built
+                            // HERE and only here; handlers return raw
+                            // values. No `isError` on success.
+                            HandlerResult::Ok(result) => match serde_json::to_string(&result) {
+                                Ok(text) => Ok(json!({
+                                    "content": [{"type": "text", "text": text}],
+                                })),
+                                // A value that cannot serialize is a
+                                // server bug: fail loud with an
+                                // internal-error frame, never a half-built
+                                // success envelope.
+                                Err(err) => Err((
+                                    -32603,
+                                    "internal error",
+                                    format!("tools/call: result serialization failed for {name}: {err}"),
+                                )),
+                            },
                             // Refusal: a normal result, isError + content
                             // array — never a JSON-RPC error object.
                             HandlerResult::Err(message) => Ok(json!({
@@ -253,6 +307,11 @@ fn invalid_request_frame(id: Value, message: &str) -> String {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":-32600,"message":message}}).to_string()
 }
 
+/// Identity the server reports in the `initialize` result (MCP requires
+/// `serverInfo`): the bin name, versioned with spec.md (v0.3).
+const SERVER_NAME: &str = "exomem-mcp";
+const SERVER_VERSION: &str = "0.3.0";
+
 /// `initialize`: negotiate the protocol revision. The server answers with
 /// the requested revision when it implements it (the current `2026-07-28`,
 /// or the earlier `2025-11-25`); anything else — unknown, future, or
@@ -271,12 +330,13 @@ fn handle_initialize(request: &Value) -> Value {
     json!({
         "protocolVersion": protocol_version,
         "capabilities": {"tools": {"listChanged": false}},
+        "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
     })
 }
 
-/// `tools/list`: advertise the merged registry — the tool modules'
-/// shapes (the handshake pair: the ungated `read_signoff` gate-opener,
-/// then the gated `append_signoff`).
+/// `tools/list`: advertise the merged registry — every tool module's
+/// shapes, in handshake order (the ungated `read_signoff` gate-opener
+/// first; see `Server::new_server` for the module rows).
 fn tools_list_result(server: &Server) -> Value {
     let tools: Vec<Value> = server
         .tools

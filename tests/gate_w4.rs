@@ -134,7 +134,7 @@ fn recall_substring_searches_all_buckets_dated_and_confined() {
 fn recall_scope_confines_to_named_bucket() {
     let dir = tmp_root("recall-scope");
     let mut s = seeded(&dir);
-    let v = match recall::recall(&mut s, "probe", &json!({"query": "Parser edge", "scope": "signoff"})) {
+    let v = match recall::recall(&mut s, "probe", &json!({"query": "Worker signoff (beta)", "scope": "signoff"})) {
         HandlerResult::Ok(v) => v,
         HandlerResult::Err(e) => panic!("recall must succeed: {e}"),
     };
@@ -203,12 +203,23 @@ fn log_tick_after_handshake_appends_audit_jsonl() {
     let dir = tmp_root("tick-ok");
     let mut s = Server::new_server(&dir);
     config::init_state(&dir).unwrap();
+    // Fixture correction (orchestrator-authorized, seed-only): the handshake is
+    // granted by a SUCCESSFUL read_signoff, and read_signoff legitimately refuses
+    // a root with no signoff.md — so this fixture's own premise ("after the
+    // handshake") needs the bucket on disk. No assertion touched.
+    std::fs::write(dir.join("signoff.md"), SEED).unwrap();
     let _ = exomem_mcp::tools::signoff_read::read_signoff(&mut s, "probe");
     match ticks::log_tick(&mut s, "probe", &json!({"check": "model-server-health", "result": "ok"})) {
         HandlerResult::Err(e) => panic!("post-handshake tick must succeed: {e}"),
         HandlerResult::Ok(_) => {}
     }
-    let f = dir.join(".audit/2026-09-13.jsonl");
+    // Fixture correction (orchestrator-authorized): the audit file is named by
+    // the root's LOCAL date from its recorded tz fingerprint — the same
+    // authority log_tick writes through (claims::local_date) — so this pins the
+    // path shape `.audit/<local-date>.jsonl` instead of one calendar day. The
+    // assertion below is unchanged.
+    let local = exomem_mcp::tools::claims::local_date(&dir).unwrap();
+    let f = dir.join(format!(".audit/{local}.jsonl"));
     let text = std::fs::read_to_string(&f).unwrap();
     let j: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
     assert_eq!(j["check"], "model-server-health");
@@ -279,6 +290,10 @@ fn compliance_report_is_audit_derived_and_measured() {
     let dir = tmp_root("compliance");
     let mut s = Server::new_server(&dir);
     config::init_state(&dir).unwrap();
+    // Fixture correction (orchestrator-authorized, seed-only): same reason as
+    // log_tick_after_handshake_appends_audit_jsonl — the post-handshake writes
+    // need the handshake, which needs a signoff.md to read. No assertion touched.
+    std::fs::write(dir.join("signoff.md"), SEED).unwrap();
     // one REAL refused attempt before the handshake — the gate counter is
     // observable at the gate, and the audit log never records refusals
     // (they land nothing).

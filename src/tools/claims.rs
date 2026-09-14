@@ -54,6 +54,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
+use std::os::unix::fs::MetadataExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -342,16 +343,36 @@ pub fn claim_orchestrator(server: &mut Server, session: &str, args: &Value) -> H
         // Absent: the fresh-claim path — race the create with
         // O_CREAT|O_EXCL (a lost race re-reads below).
         ClaimRead::Absent => {
-            let res = create_fresh_claim(&claims_dir, &path, session, &date);
+            let mut res = create_fresh_claim(&claims_dir, &path, session, &date);
             // The per-session claim_token (spec §2), keyed by the
             // caller's session (the gate key) — this is what
             // `write_brief` validates and what `write_dayfile` /
             // `write_warm_start` co-validate. A lost race that
             // resolves back to THIS session stores the winner's
             // token the same way (idempotency under a race).
-            if let HandlerResult::Ok(v) = &res {
+            if let HandlerResult::Ok(v) = &mut res {
                 if let Some(t) = v.get("token").and_then(Value::as_str) {
                     server.claim_tokens.insert(session.to_string(), t.to_string());
+                }
+                // F1 (signoffs/review_Wave4OKF.md 2d): the claim HAS
+                // landed, so a missing audit tail is reported as an
+                // `audit_error` field on the SUCCESS result — never as
+                // `isError`, which spec §2 scopes to refusal/validation/
+                // gate-denial and which, rendered over landed bytes, is
+                // the both-halves FAIL spec §8 pins. When the audit
+                // landed the success shape is byte-identical: no key.
+                if v.get("claimed").and_then(Value::as_bool) == Some(true) {
+                    if let Some(err) = crate::tools::ticks::audit_write(
+                        &server.root,
+                        &server.session_id,
+                        "claim_orchestrator",
+                    )
+                    .err()
+                    {
+                        if let Some(object) = v.as_object_mut() {
+                            object.insert("audit_error".to_string(), json!(err));
+                        }
+                    }
                 }
             }
             res
@@ -370,14 +391,31 @@ pub fn claim_orchestrator(server: &mut Server, session: &str, args: &Value) -> H
                 // truth (spec §2). The file is NOT rewritten —
                 // byte-identical.
                 server.claim_tokens.insert(session.to_string(), token.clone());
-                HandlerResult::Ok(json!({
+                // F1 (signoffs/review_Wave4OKF.md 2d): the held claim is
+                // the disk truth and stays landed — a missing audit tail
+                // rides the success result as `audit_error`, never as
+                // `isError` over landed bytes (spec §2/§8). With the
+                // audit landed, the shape is byte-identical: no key.
+                let audit_error = crate::tools::ticks::audit_write(
+                    &server.root,
+                    &server.session_id,
+                    "claim_orchestrator",
+                )
+                .err();
+                let mut result = json!({
                     "claimed": true,
                     "reclaimed": true,
                     "date": date,
                     "holder": holder,
                     "token": token,
                     "acquired_at": acquired_at,
-                }))
+                });
+                if let Some(err) = audit_error {
+                    if let Some(object) = result.as_object_mut() {
+                        object.insert("audit_error".to_string(), json!(err));
+                    }
+                }
+                HandlerResult::Ok(result)
             } else {
                 // A live claim held by another session: refused, the
                 // holder and reason are named, the file is left
@@ -397,13 +435,31 @@ pub fn claim_orchestrator(server: &mut Server, session: &str, args: &Value) -> H
                 eprintln!(
                     "[exomem-mcp] claim_orchestrator: .claims/orchestrator-{date} was orphaned (holder crashed before publishing) and is {a:?} old — taken over server-side"
                 );
-                let res = create_fresh_claim(&claims_dir, &path, session, &date);
+                let mut res = create_fresh_claim(&claims_dir, &path, session, &date);
                 // A takeover makes THIS session the holder: the
                 // fresh token is stored per-session like any other
                 // successful claim (spec §2).
-                if let HandlerResult::Ok(v) = &res {
+                if let HandlerResult::Ok(v) = &mut res {
                     if let Some(t) = v.get("token").and_then(Value::as_str) {
                         server.claim_tokens.insert(session.to_string(), t.to_string());
+                    }
+                    // F1 (signoffs/review_Wave4OKF.md 2d): the takeover
+                    // claim HAS landed — an audit tail that did not land
+                    // is an `audit_error` field on the success, never
+                    // `isError` over landed bytes (spec §2/§8). No key
+                    // at all when the audit landed.
+                    if v.get("claimed").and_then(Value::as_bool) == Some(true) {
+                        if let Some(err) = crate::tools::ticks::audit_write(
+                            &server.root,
+                            &server.session_id,
+                            "claim_orchestrator",
+                        )
+                        .err()
+                        {
+                            if let Some(object) = v.as_object_mut() {
+                                object.insert("audit_error".to_string(), json!(err));
+                            }
+                        }
                     }
                 }
                 res
@@ -701,12 +757,29 @@ pub fn write_dayfile(server: &mut Server, session: &str, args: &Value) -> Handle
     //    the day file's own lock name).
     let lock_name = format!("{today}.md.lock");
     match replace_dayfile_under_lock(&root, session, &today, &lock_name, &content) {
-        Ok(()) => HandlerResult::Ok(json!({
-            "replaced": true,
-            "path": root.join(format!("{today}.md")).display().to_string(),
-            "date": today,
-            "bytes": content.len(),
-        })),
+        Ok(()) => {
+            // F1 (signoffs/review_Wave4OKF.md 2d): the day file HAS
+            // landed, so a missing audit tail is reported as an
+            // `audit_error` field on the SUCCESS result — never as
+            // `isError`, which spec §2 scopes to refusal/validation/
+            // gate-denial and which, rendered over landed bytes, is the
+            // both-halves FAIL spec §8 pins. When the audit landed the
+            // success shape is byte-identical: no `audit_error` key.
+            let audit_error =
+                crate::tools::ticks::audit_write(&root, &server.session_id, "write_dayfile").err();
+            let mut result = json!({
+                "replaced": true,
+                "path": root.join(format!("{today}.md")).display().to_string(),
+                "date": today,
+                "bytes": content.len(),
+            });
+            if let Some(err) = audit_error {
+                if let Some(object) = result.as_object_mut() {
+                    object.insert("audit_error".to_string(), json!(err));
+                }
+            }
+            HandlerResult::Ok(result)
+        }
         Err(msg) => HandlerResult::Err(msg),
     }
 }
@@ -833,12 +906,26 @@ fn acquire_lock(root: &Path, session: &str, lock_name: &str) -> Result<LockToken
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // The file is the truth: a concurrent holder owns it.
-                if lock_age(&path).is_some_and(|age| age >= STALE_AFTER) {
-                    // STALE holder (silent for ≥ STALE_AFTER):
-                    // spec §2 mandates the server take over — an
-                    // orphaned lock must never wedge the root.
-                    let _ = std::fs::remove_file(&path);
-                    continue; // retry the create immediately
+                // F2 (signoffs/review_Wave4OKF.md 2b): age-then-remove
+                // unconditionally is a TOCTOU — two acquirers that both
+                // measured the same stale record could each remove
+                // whatever stood at the path, so the slower one deleted
+                // the faster one's FRESH lock and both believed they held
+                // the mutex. The takeover is now identity-checked: the
+                // removal only ever removes the very record it measured.
+                if let Some(stale) = measure_stale_lock(&path) {
+                    if remove_stale_lock(&path, &stale) {
+                        // STALE holder (silent for ≥ STALE_AFTER) and
+                        // still the recorded one: spec §2 mandates the
+                        // take over — an orphaned lock must never wedge
+                        // the root.
+                        continue; // retry the create immediately
+                    }
+                    // The re-check refused: a successor took the stale
+                    // lock over between the measurement and this
+                    // removal. We release our claim on that path (their
+                    // lock stays untouched) and re-enter the bounded
+                    // retry below.
                 }
                 if attempts >= MAX_ACQUIRE_ATTEMPTS {
                     return Err(format!(
@@ -874,6 +961,87 @@ fn lock_age(path: &Path) -> Option<Duration> {
         std::fs::metadata(path).ok()?.modified().ok()?
     };
     now.duration_since(since).ok()
+}
+
+/// The identity of the lock file as measured STALE (F2,
+/// signoffs/review_Wave4OKF.md 2b): the published `pid`/`nonce`/`epoch`
+/// fields — the same fields `release_lock` identity-checks — the full
+/// contents, and the stat facts (mtime, size, inode) at measurement
+/// time. `None` fields cover the empty/corrupt file whose age came from
+/// the mtime fallback (its measured identity is then its stat alone).
+struct StaleLock {
+    pid: Option<String>,
+    nonce: Option<String>,
+    epoch: Option<String>,
+    contents: Option<String>,
+    mtime: Option<SystemTime>,
+    size: u64,
+    ino: u64,
+}
+
+/// Measure the holder's silence AND its identity in one step: `Some`
+/// only when the file exists, its age (the `lock_age` rule: published
+/// `epoch`, else mtime) is at least `STALE_AFTER`, and its stat facts
+/// could be recorded. `None` means FRESH or unmeasurable — the caller
+/// waits (the safe default).
+fn measure_stale_lock(path: &Path) -> Option<StaleLock> {
+    let age = lock_age(path)?;
+    if age < STALE_AFTER {
+        return None;
+    }
+    let meta = std::fs::metadata(path).ok()?;
+    let contents = std::fs::read_to_string(path).ok();
+    let field = |name: &str| {
+        contents
+            .as_deref()
+            .and_then(|c| parse_lock_field(c, name).map(str::to_string))
+    };
+    Some(StaleLock {
+        pid: field("pid"),
+        nonce: field("nonce"),
+        epoch: field("epoch"),
+        contents,
+        mtime: meta.modified().ok(),
+        size: meta.len(),
+        ino: meta.ino(),
+    })
+}
+
+/// The identity-safe takeover (F2): re-read the record and re-stat the
+/// file, and remove it ONLY while every identity field (pid/nonce/
+/// epoch) and every stat fact (mtime/size/inode) still matches what was
+/// measured stale — a mismatch means someone took the lock over first,
+/// and removing then would delete THEIR fresh lock. Returns whether the
+/// removal was ours to make. Residual window: between this verified
+/// re-read and the `remove_file` itself microseconds remain open for a
+/// successor to land — recorded as the accepted residual by the review
+/// (F2); fully closing it needs rename-based takeover, out of this
+/// round's scope.
+fn remove_stale_lock(path: &Path, stale: &StaleLock) -> bool {
+    let now_contents = std::fs::read_to_string(path).ok();
+    if now_contents != stale.contents {
+        return false;
+    }
+    let text = now_contents.as_deref().unwrap_or("");
+    if [
+        ("pid", &stale.pid),
+        ("nonce", &stale.nonce),
+        ("epoch", &stale.epoch),
+    ]
+    .iter()
+    .any(|(name, want)| parse_lock_field(text, name).map(str::to_string) != **want)
+    {
+        return false;
+    }
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime
+    {
+        return false;
+    }
+    std::fs::remove_file(path).is_ok()
 }
 
 /// Extract a whitespace-delimited `name=value` field from lock-file
