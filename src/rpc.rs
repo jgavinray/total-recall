@@ -61,6 +61,15 @@ pub struct Server {
     pub tools: Vec<Tool>,
     /// method name -> dispatch entry point for `tools/call`.
     pub handlers: HashMap<String, Handler>,
+    /// session_id -> claim token for the date the session claims (spec §2:
+    /// "Server keeps per-session handshake state `{session_id, handshaked,
+    /// claim_token}`"). `claim_orchestrator` stores the token here per-session;
+    /// `write_brief` validates ONLY this field (its schema carries no token
+    /// param), while `write_dayfile` / `write_warm_start` validate BOTH this
+    /// field and the caller-supplied token against the claim file's token for
+    /// the LOCAL date (spec §5). Process-local: a server restart re-stores it
+    /// via re-claim (the claim file is the disk truth, §5).
+    pub claim_tokens: HashMap<String, String>,
     /// session_id -> count of gated-tool calls ATTEMPTED and refused
     /// before the handshake. This is what makes the `session_compliance`
     /// metric "observable at the gate" (spec §4).
@@ -117,6 +126,7 @@ impl Server {
             tools,
             handlers,
             attempted_write_before_handshake: HashMap::new(),
+            claim_tokens: HashMap::new(),
         }
     }
 }
