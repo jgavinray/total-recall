@@ -1,4 +1,4 @@
-//! §8 companion — wave 1, `rpc` module self-checks (ExoM1).
+//! §8 companion — wave 1 + wave-2 rewire, `rpc` module self-checks (ExoM1).
 //!
 //! Module-scoped only, per the build contract, and deliberately
 //! NON-OVERLAPPING with the orchestrator's gate (`tests/gate_w1.rs`):
@@ -19,15 +19,15 @@
 //! - the §4 gate: `initialize` does NOT grant the handshake; the
 //!   `attempted_write_before_handshake` counter counts gate refusals and
 //!   nothing else
-//! - the wave-1 `tools/list` shape: the registry carries `append_signoff`
-//!   with the pinned spec §3 schema
+//! - the wave-2 `tools/list` shape: the merged registry carries the
+//!   handshake pair (read_signoff, then append_signoff) with the pinned
+//!   spec §3 schemas
 //! - `serve_stdio` end-to-end: frames out on stdout, notifications silent,
 //!   clean EOF -> exit 0 (spawns the real binary; this is the one test
 //!   coupled to the sibling's `src/main.rs` landing)
 //!
-//! This file compiles against the `exomem_mcp` lib; until the sibling
-//! module (`src/config.rs`, declared by the orchestrator-owned `lib.rs`)
-//! lands, the crate does not compile at all — the intended loud failure.
+//! This file compiles against the `exomem_mcp` lib (wave 2: all
+//! modules landed).
 
 use exomem_mcp::rpc::{self, Server};
 use serde_json::{json, Value};
@@ -186,11 +186,12 @@ fn initialize_does_not_grant_the_handshake() {
 fn gate_opens_when_handshaken_and_counter_stays_put() {
     // The handshaken map is the process-local gate state (spec §4
     // pseudocode: `handshaken[session] = True` on read_signoff). The
-    // later-wave read_signoff writes it; here the test sets the pinned
-    // field directly. Once handshaken, the gate must NOT fire — the
-    // wave-1 deferral is a normal isError result (the append body is a
-    // later wave, and the protocol layer never claims a write it did not
-    // make) and it must NOT count as a pre-handshake attempt.
+    // live path is read_signoff's dispatch entry; here the test sets
+    // the pinned map field directly so this protocol-layer check stays
+    // self-contained. Once handshaken, the gate must NOT fire — the
+    // wave-2 handler performs the REAL append (a normal result, no
+    // isError, the line on disk) and a post-handshake call must NOT
+    // count as a pre-handshake attempt.
     let mut s = fresh_server("gate-open");
     s.handshaken.insert(s.session_id.clone(), true);
     let out = rpc::handle_frame(
@@ -199,12 +200,31 @@ fn gate_opens_when_handshaken_and_counter_stays_put() {
     )
     .unwrap();
     let v: Value = serde_json::from_str(&out).unwrap();
-    assert!(v["result"]["isError"].as_bool().unwrap(), "still a normal result, never an error object");
+    assert_eq!(v["id"], 3);
     assert!(
-        v["result"]["content"][0]["text"]
-            != "handshake incomplete — call read_signoff first",
-        "the gate refusal must be gone once handshaken"
+        v["result"]["isError"].is_null(),
+        "post-handshake: a success result, never an error object and no refusal"
     );
+    assert_eq!(v["result"]["appended"], true, "the wave-2 success shape");
+    assert!(
+        v["result"]["entry"].as_str().unwrap().contains("Worker signoff (probe)"),
+        "the echoed entry carries the fixed token"
+    );
+    // The append really happened on disk, stamped with the process-local
+    // session (the frame path keys the gate and the stamps on
+    // server.session_id). The handler's handshake step also seeds the
+    // stock template on a fresh root, so pin the APPENDED line —
+    // the last one — not the whole file (file contents are pinned by
+    // gate_w2).
+    let written = std::fs::read_to_string(s.root.join("signoff.md")).unwrap();
+    let lines: Vec<&str> = written.lines().collect();
+    let last = lines.last().copied().expect("signoff.md is non-empty");
+    assert!(
+        last.starts_with("Worker signoff (probe) | done: yes"),
+        "the pinned line format: {}",
+        last
+    );
+    assert!(last.contains(&format!("| session: {}", s.session_id)));
     assert!(
         !s.attempted_write_before_handshake.contains_key(&s.session_id),
         "a post-handshake call is not a pre-handshake attempt"
@@ -229,19 +249,40 @@ fn gate_refusals_are_counted_per_session() {
 }
 
 #[test]
-fn tools_list_wave1_registry_is_the_pinned_shape() {
-    // Wave 1 registers the gated member of the handshake pair with the
-    // spec §3 shape; the free-function builder (contract module API) is
-    // exercised here while the rest of this file uses Server::new_server.
+fn tools_list_wave2_registry_carries_the_handshake_pair() {
+    // Wave 2 merges the registry: the tool modules own the shapes and
+    // the dispatch entries (read_signoff first, then append_signoff —
+    // the handshake order); the free-function builder (contract module
+    // API) is exercised here while the rest of this file uses
+    // Server::new_server.
     let mut s = rpc::new_server(&rpc_root("tools-list"));
     let out = rpc::handle_frame(&mut s, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
         .unwrap();
     let v: Value = serde_json::from_str(&out).unwrap();
     let tools = v["result"]["tools"].as_array().expect("tools must be an array");
-    assert_eq!(tools.len(), 1, "the wave-1 registry carries exactly append_signoff");
-    assert_eq!(tools[0]["name"], "append_signoff");
-    assert!(!tools[0]["description"].as_str().unwrap().is_empty());
-    let schema = &tools[0]["inputSchema"];
+    assert_eq!(
+        tools.len(),
+        2,
+        "the merged registry carries exactly the handshake pair"
+    );
+    assert_eq!(
+        tools[0]["name"], "read_signoff",
+        "the gate-opener is advertised first (handshake order)"
+    );
+    assert_eq!(tools[1]["name"], "append_signoff");
+    for tool in tools {
+        assert!(!tool["description"].as_str().unwrap().is_empty());
+    }
+    // read_signoff takes no arguments: empty object, closed.
+    let read = &tools[0]["inputSchema"];
+    assert_eq!(read["type"], "object");
+    assert!(
+        read["properties"].as_object().map(|p| p.is_empty()).unwrap_or(false),
+        "read_signoff's schema carries no properties"
+    );
+    assert_eq!(read["additionalProperties"], false);
+    // append_signoff keeps the pinned spec §3 schema.
+    let schema = &tools[1]["inputSchema"];
     assert_eq!(schema["type"], "object");
     assert_eq!(
         schema["required"],

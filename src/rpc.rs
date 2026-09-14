@@ -1,13 +1,18 @@
 //! JSON-RPC 2.0 / MCP protocol layer over stdio (spec §2).
 //!
-//! Wave 1 scope, per the build contract: the protocol SEMANTICS are in scope
-//! — initialize negotiation, tools/list, tools/call dispatch, the error
-//! codes, notification silence, and the stdio frame loop. The tool registry
-//! carries the pinned tool shapes (spec §3); tool BODIES land in later waves.
-//! The handshake GATE (spec §4) is in scope: every disk-touching call is
-//! refused with a normal result carrying `isError: true` + a `content`
-//! array until `read_signoff` has succeeded this session — never with a
-//! JSON-RPC `error` object.
+//! Wave 1 pinned the protocol SEMANTICS: initialize negotiation,
+//! tools/list, tools/call dispatch, the error codes, notification
+//! silence, and the stdio frame loop. Wave 2 merges the tool registry:
+//! the tool shapes and dispatch entries are owned by the tool modules
+//! (`crate::tools::signoff_read`, `crate::tools::signoff_append`), and
+//! `new_server` assembles their `tools()`/`handlers()` entries, adding
+//! nothing of its own. The protocol layer wraps NO handler in
+//! `crate::gate::gate` — gated handlers (e.g. `append_signoff`) run
+//! the gate check and count refused attempts INLINE, and a second wrap
+//! would tick `attempted_write_before_handshake` twice (gate_w3 pins
+//! the exact count). A refused handler is still rendered as a NORMAL
+//! result carrying `isError: true` + a `content` array (spec §2/§4) —
+//! never a JSON-RPC `error` object.
 //!
 //! Pinned semantics (build contract §src/rpc.rs; spec §2 protocol shapes):
 //! - malformed JSON                -> Err frame, code -32700 "parse error"
@@ -92,10 +97,18 @@ impl Server {
     /// `config::init_state` touches the disk, and it creates `.state/`
     /// alone).
     pub fn new_server(root: &Path) -> Server {
-        let tools = vec![append_signoff_tool()];
-        let mut handlers: HashMap<String, Handler> = HashMap::new();
-        for tool in &tools {
-            handlers.insert(tool.name.clone(), append_signoff_handler);
+        // The merged registry (wave 2): the tool modules own the tool
+        // shapes and the dispatch entries; the protocol layer only
+        // assembles them, in handshake order (read_signoff first, then
+        // append_signoff). `append_signoff`'s handler runs the gate
+        // check and counts refused attempts INLINE (see the module
+        // docs) — do NOT additionally wrap that entry in
+        // `crate::gate::gate`, which would double-count every refusal.
+        let mut tools = crate::tools::signoff_read::tools();
+        tools.extend(crate::tools::signoff_append::tools());
+        let mut handlers = crate::tools::signoff_read::handlers();
+        for (name, handler) in crate::tools::signoff_append::handlers() {
+            handlers.insert(name, handler);
         }
         Server {
             root: root.to_path_buf(),
@@ -251,8 +264,9 @@ fn handle_initialize(request: &Value) -> Value {
     })
 }
 
-/// `tools/list`: advertise the registry (spec §3 shapes; the wave-1
-/// registry is the handshake pair's gated member — see `append_signoff_tool`).
+/// `tools/list`: advertise the merged registry — the tool modules'
+/// shapes (the handshake pair: the ungated `read_signoff` gate-opener,
+/// then the gated `append_signoff`).
 fn tools_list_result(server: &Server) -> Value {
     let tools: Vec<Value> = server
         .tools
@@ -266,52 +280,6 @@ fn tools_list_result(server: &Server) -> Value {
         })
         .collect();
     json!({"tools": tools})
-}
-
-/// The `append_signoff` tool entry (spec §3): the description carries the
-/// MANDATORY contract text verbatim, and the input schema is the pinned
-/// shape. Wave 1 registers the shape plus the handshake GATE; the
-/// verbatim-append body (`.locks/` lock, 16384 B cap, server stamps) lands
-/// in a later wave.
-fn append_signoff_tool() -> Tool {
-    Tool {
-        name: "append_signoff".to_string(),
-        description: "Appends this session's signoff verbatim to signoff.md as exactly ONE line: `Worker signoff (<role>) | done: <yes|no> | unpushed: <…> | awaits human: <…> | still running: <…>` — the on-disk format the shipped guard and launcher already parse — with server-appended `| workflow: … | ts: <ISO-8601Z> | session: …` fields only AFTER the required ones, and `| kaibo review: …` when the optional field is present. Append-only by construction under an exclusive `.locks/` lock file; entries (serialized form, incl. server stamps) > 16384 bytes refused — the cap clears the measured longest real entry, 4919 bytes at signoff.md:356 (measured 2026-09-13). REFUSES with 'handshake incomplete — call read_signoff first' unless read_signoff succeeded this session. Last action before any stop/compact/handoff. [wave 1: protocol shape + handshake gate only; the append body lands in a later wave]".to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "role": {"type": "string", "description": "Worker/delegated-session role — emitted into the fixed token `Worker signoff (<role>)` the guard's schema check and the launcher grep match"},
-                "workflow": {"type": "string", "description": "Workflow/delegation this session belongs to (e.g. memory-kernel); server-stamped after the required fields"},
-                "done": {"type": "string", "enum": ["yes", "no"], "description": "Completion claim — the `done:` field the guard's rule-5 done-claim regex keys on"},
-                "unpushed": {"type": "string", "description": "Committed/complete but not pushed; emitted verbatim as the `unpushed:` field (default 'none')"},
-                "awaits_human": {"type": "string", "description": "Blocked on the human; emitted as the `awaits human:` field (default 'none')"},
-                "still_running": {"type": "string", "description": "Processes still running on the box; emitted as the `still running:` field (default 'no')"},
-                "kaibo_review": {"type": "string", "description": "Review handle, e.g. 'job-12 (cast) @ <iso>', 'n/a (no code changes)', or 'waived (<why>)'; emitted as `| kaibo review: …` after the four status fields when present. The server passes it through verbatim and never synthesizes it; the review gate itself is OUT OF SCOPE (§10) and stays guard-enforced."}
-            },
-            "required": ["role", "workflow", "done"],
-            "additionalProperties": false
-        }),
-    }
-}
-
-/// The wave-1 `append_signoff` dispatch entry: the handshake GATE
-/// (spec §4) is fully enforced — a pre-handshake call is refused with the
-/// exact pinned refusal text and counted in
-/// `attempted_write_before_handshake` ("observable at the gate"). The
-/// post-handshake append body is a later wave; the protocol layer refuses
-/// loudly rather than ever claim a write it did not make.
-fn append_signoff_handler(server: &mut Server, _arguments: &Value) -> HandlerResult {
-    let handshaken = server.handshaken.get(&server.session_id).copied().unwrap_or(false);
-    if !handshaken {
-        *server
-            .attempted_write_before_handshake
-            .entry(server.session_id.clone())
-            .or_insert(0) += 1;
-        return HandlerResult::Err("handshake incomplete — call read_signoff first".to_string());
-    }
-    HandlerResult::Err(
-        "append_signoff refused: the append body (exclusive .locks/ lock, server stamps, signoff.md write) lands in a later wave — wave 1 registers the tool shape and the handshake gate only".to_string(),
-    )
 }
 
 /// The stdio loop (spec §2: newline-delimited JSON-RPC over stdio, logs to

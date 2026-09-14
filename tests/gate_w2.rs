@@ -17,10 +17,10 @@
 //!   under an `O_CREAT|O_EXCL` lock file in `.locks/`; >16384 B refused with ZERO bytes written.
 //! - Two racing appends (one process) and two server processes on one root both serialize.
 
-use exomem_mcp::config::{self, ConfigArgs};
+use exomem_mcp::config;
 use exomem_mcp::gate;
-use exomem_mcp::rpc::{self, HandlerResult, Server};
-use exomem_mcp::tools::signoff;
+use exomem_mcp::rpc::{HandlerResult, Server};
+use exomem_mcp::tools::{signoff_append, signoff_read};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -58,7 +58,7 @@ fn read_signoff_parses_warm_start_ranked_history_and_workers() {
     seed(&dir);
     let mut s = Server::new_server(&dir);
     let session = "probe";
-    let v = match signoff::read_signoff(&mut s, session) {
+    let v = match signoff_read::read_signoff(&mut s, session) {
         HandlerResult::Ok(v) => v,
         HandlerResult::Err(e) => panic!("read_signoff must succeed on a seeded fixture: {e}"),
     };
@@ -84,7 +84,7 @@ fn handshake_marks_session_and_persists_id() {
     seed(&dir);
     let mut s = Server::new_server(&dir);
     assert!(!gate::gate(&mut s, "probe").is_ok(), "gate must refuse before handshake");
-    let _ = signoff::read_signoff(&mut s, "probe");
+    let _ = signoff_read::read_signoff(&mut s, "probe");
     assert!(gate::gate(&mut s, "probe").is_ok(), "gate must pass after handshake");
     let sess = dir.join(".state/sessions.json");
     assert!(sess.exists(), ".state/sessions.json must persist the session id");
@@ -101,7 +101,7 @@ fn append_before_handshake_is_refused_and_writes_nothing() {
     let before = std::fs::read(dir.join("signoff.md")).unwrap();
     let mut s = Server::new_server(&dir);
     let args = json!({"role":"probe","workflow":"memory-kernel","done":"yes","unpushed":"n/a (no repo writes)","awaits_human":"none","still_running":"no","kaibo_review":"n/a (no code changes)"});
-    let r = signoff::append_signoff(&mut s, "probe", &args);
+    let r = signoff_append::append_signoff(&mut s, "probe", &args);
     match r {
         HandlerResult::Err(msg) => assert!(
             msg.contains("handshake incomplete"),
@@ -124,9 +124,9 @@ fn append_after_handshake_emits_legacy_line_with_stamps() {
     config::init_state(&dir).unwrap();
     seed(&dir);
     let mut s = Server::new_server(&dir);
-    let _ = signoff::read_signoff(&mut s, "probe");
+    let _ = signoff_read::read_signoff(&mut s, "probe");
     let args = json!({"role":"probe","workflow":"memory-kernel","done":"yes","unpushed":"n/a (no repo writes)","awaits_human":"none","still_running":"no","kaibo_review":"n/a (no code changes)"});
-    match signoff::append_signoff(&mut s, "probe", &args) {
+    match signoff_append::append_signoff(&mut s, "probe", &args) {
         HandlerResult::Err(e) => panic!("append must succeed: {e}"),
         HandlerResult::Ok(_) => {}
     }
@@ -146,7 +146,7 @@ fn append_after_handshake_emits_legacy_line_with_stamps() {
     assert!(line.contains("| still running: no"));
     assert!(line.contains("| kaibo review: n/a (no code changes)"));
     assert!(line.contains("| workflow: memory-kernel"));
-    let ts = line.split("| ts: ").nth(1).unwrap().trim().to_string();
+    let ts = line.split("| ts: ").nth(1).unwrap().split(" | session: ").next().unwrap().trim().to_string();
     assert!(ts.ends_with('Z') && ts.len() >= 20, "server-stamped ts must be ISO-8601Z: {ts}");
     assert!(line.contains("| session: "));
     // pre-existing bytes preserved verbatim
@@ -159,17 +159,17 @@ fn append_cap_15000_passes_and_20000_refused_zero_bytes() {
     config::init_state(&dir).unwrap();
     seed(&dir);
     let mut s = Server::new_server(&dir);
-    let _ = signoff::read_signoff(&mut s, "probe");
+    let _ = signoff_read::read_signoff(&mut s, "probe");
     let big15000 = "x".repeat(15000);
     let args = json!({"role":"probe","workflow":"memory-kernel","done":"yes","unpushed":big15000,"awaits_human":"none","still_running":"no"});
-    match signoff::append_signoff(&mut s, "probe", &args) {
+    match signoff_append::append_signoff(&mut s, "probe", &args) {
         HandlerResult::Err(e) => panic!("15000-byte entry must PASS (lock carries size): {e}"),
         HandlerResult::Ok(_) => {}
     }
     let big20000 = "y".repeat(20000);
     let args2 = json!({"role":"probe","workflow":"memory-kernel","done":"yes","unpushed":big20000,"awaits_human":"none","still_running":"no"});
     let before = std::fs::read(dir.join("signoff.md")).unwrap().len();
-    match signoff::append_signoff(&mut s, "probe", &args2) {
+    match signoff_append::append_signoff(&mut s, "probe", &args2) {
         HandlerResult::Err(msg) => assert!(msg.contains("16384") || msg.contains("16384-byte"), "cap refusal must name the limit: {msg}"),
         HandlerResult::Ok(_) => panic!("20000-byte entry must be REFUSED"),
     }
@@ -186,9 +186,9 @@ fn kaibo_review_is_passed_through_verbatim_never_synthesized() {
     config::init_state(&dir).unwrap();
     seed(&dir);
     let mut s = Server::new_server(&dir);
-    let _ = signoff::read_signoff(&mut s, "probe");
+    let _ = signoff_read::read_signoff(&mut s, "probe");
     let args = json!({"role":"probe","workflow":"memory-kernel","done":"yes","unpushed":"none","awaits_human":"none","still_running":"no","kaibo_review":"job-42 (vllm-local) @ 2026-09-13"});
-    match signoff::append_signoff(&mut s, "probe", &args) {
+    match signoff_append::append_signoff(&mut s, "probe", &args) {
         HandlerResult::Err(e) => panic!("append must succeed: {e}"),
         HandlerResult::Ok(_) => {}
     }
@@ -206,7 +206,7 @@ fn racing_appends_serialize_no_interleave() {
     config::init_state(&dir).unwrap();
     seed(&dir);
     let mut s = Server::new_server(&dir);
-    let _ = signoff::read_signoff(&mut s, "probe");
+    let _ = signoff_read::read_signoff(&mut s, "probe");
     let mut handles = Vec::new();
     for i in 0..10 {
         let root = dir.clone();
@@ -214,9 +214,9 @@ fn racing_appends_serialize_no_interleave() {
         let wf = format!("wf-{i}");
         handles.push(std::thread::spawn(move || {
             let mut s2 = Server::new_server(&root);
-            let _ = signoff::read_signoff(&mut s2, &role);
+            let _ = signoff_read::read_signoff(&mut s2, &role);
             let args = json!({"role": role, "workflow": wf, "done":"yes", "unpushed":"none", "awaits_human":"none", "still_running":"no"});
-            match signoff::append_signoff(&mut s2, &role, &args) {
+            match signoff_append::append_signoff(&mut s2, &role, &args) {
                 HandlerResult::Err(e) => Err(format!("{role}: {e}")),
                 HandlerResult::Ok(_) => Ok(()),
             }
@@ -267,7 +267,7 @@ fn two_server_processes_on_one_root_serialize() {
         drop(si);
         children.push((c, tag));
     }
-    for (mut c, tag) in children {
+    for (c, tag) in children {
         let out = c.wait_with_output().unwrap();
         assert!(out.status.success(), "process {tag} must exit 0");
     }
