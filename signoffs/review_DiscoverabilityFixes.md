@@ -33,3 +33,5 @@ Verdict obtained 2026-09-14 via kaibo cast `vllm-local` (DeepSeek-v4.1-Flash-EXL
 
 ———
 kaibo · cast `vllm-local` · explorer `DeepSeek-v4.1-Flash-EXL3` · synth `DeepSeek-v4.1-Flash-EXL3`
+
+> SHA note (2026-09-14): the reviewed commit `014f328` was recommitted as `d4d8a7c` after this review, removing a false `Co-Authored-By:` trailer added by the orchestrating session; the tree is byte-identical (`ce923755…`). The verdict text above is verbatim from kaibo job-1 as delivered against the reviewed content.
