@@ -46,7 +46,7 @@ use crate::rpc::{Handler, HandlerResult, Server, Tool};
 pub fn tools() -> Vec<Tool> {
     vec![Tool {
         name: "session_compliance".to_string(),
-        description: "Reach for this when you must VERIFY a session actually followed the memory protocol (admin/debug) — UNGATED and always available. Audit-derived report: per session — handshake time, first-write time, attempted_write_before_handshake (true when a call to a gated tool was ATTEMPTED and refused before the handshake — observable at the gate; the write itself never lands, so no 'wrote_without_handshake' metric can ever exist), write count, refused count. The numbers come from the on-disk audit trail, the handshake record and this process's gate counters — never from what a client claims. Compliance is a measured number, not a vibe.".to_string(),
+        description: "Reach for this when you must VERIFY a session actually followed the memory protocol (admin/debug) — UNGATED and always available. Audit-derived report: per session — handshake time, first-write time, attempted_write_before_handshake (true when a call to a gated tool was ATTEMPTED and refused before the handshake — observable at the gate; the write itself never lands, so no 'wrote_without_handshake' metric can ever exist), write count, refused count. Scope of the count, stated plainly: 'refused count' counts REFUSED attempts made BEFORE the handshake only (calls the gate refused, counted at this process's gate) — post-handshake claim-conflict or argument refusals are ordinary isError tool results the caller already saw, they are NOT gate refusals, and they NEVER appear in this count, so a 0 here does not mean the session was never refused. The numbers come from the on-disk audit trail, the handshake record and this process's gate counters — never from what a client claims. Compliance is a measured number, not a vibe.".to_string(),
         input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
     }]
 }
@@ -159,7 +159,13 @@ pub fn session_compliance(server: &mut Server, session: &str, arguments: &Value)
         })
         .collect();
 
-    HandlerResult::Ok(json!({"sessions": sessions}))
+    // FOUND-5: the refused-count scope rides the report itself, not
+    // just the advertised description — a reader of the numbers sees
+    // what a zero does and does not cover.
+    HandlerResult::Ok(json!({
+        "sessions": sessions,
+        "refused_count_scope": "counts REFUSED attempts made BEFORE the handshake only (gate refusals); post-handshake claim-conflict or argument refusals are isError tool results the caller already saw and are never counted here",
+    }))
 }
 
 // ---------------------------------------------------------------------------

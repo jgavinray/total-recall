@@ -13,8 +13,10 @@
 //!   the LOCAL date AND the server's per-session claim_token for the
 //!   caller (stored by that session's own `claim_orchestrator`) — a
 //!   claim file planted on disk alone is NOT a valid claim. Any other
-//!   outcome is the exact pinned refusal `write_dayfile refused: no
-//!   valid orchestrator_<date> claim — single-writer dayfile`,
+//!   outcome is the pinned refusal opening `write_dayfile refused: no
+//!   valid orchestrator_<date> claim — single-writer dayfile: …`,
+//!   enriched with whether a claim exists (holder + acquired_at when
+//!   held) and the stop-and-report exit,
 //!   decided BEFORE any lock is acquired (zero side effects); on
 //!   success the day file is replaced byte-exact, atomically
 //!   (tmp + rename) under the day file's own `.locks/` lock (the
@@ -315,7 +317,7 @@ fn write_dayfile_without_claim_refused_exact_text_zero_side_effects() {
 
     match claims::write_dayfile(&mut s, "probe", &json!({"content": "body", "orchestrator_token": "bogus"})) {
         HandlerResult::Err(msg) => {
-            let expected = format!("write_dayfile refused: no valid orchestrator_{d} claim — single-writer dayfile");
+            let expected = format!("write_dayfile refused: no valid orchestrator_{d} claim — single-writer dayfile: no .claims/orchestrator-{d} claim exists and this session holds no claim token for the local date — call claim_orchestrator once; if THAT refusal names another holder, stop and report the holder to the human — repeat write_dayfile calls can never land while it is held — nothing written");
             assert_eq!(msg, expected, "the refusal must be the EXACT pinned text");
         }
         HandlerResult::Ok(_) => panic!("write_dayfile must refuse without a valid claim"),
@@ -329,11 +331,13 @@ fn write_dayfile_wrong_token_refused_claim_unchanged_then_correct_token_succeeds
     let dir = tmp_root("dayfile-wrongtok");
     let mut s = seeded(&dir);
     let d = date(&dir);
-    let tok = claim_value(&mut s, "probe", &json!({}))["token"].as_str().unwrap().to_string();
+    let claim = claim_value(&mut s, "probe", &json!({}));
+    let tok = claim["token"].as_str().unwrap().to_string();
+    let acquired = claim["acquired_at"].as_str().unwrap().to_string();
     let cf = claim_path(&dir, &d);
     let before = std::fs::read(&cf).unwrap();
 
-    let expected = format!("write_dayfile refused: no valid orchestrator_{d} claim — single-writer dayfile");
+    let expected = format!("write_dayfile refused: no valid orchestrator_{d} claim — single-writer dayfile: a claim EXISTS — .claims/orchestrator-{d} is held by session=probe (acquired {acquired}); the presented token does not form the required double agreement (it must equal both the token recorded in the claim file and the token this session received from its own claim_orchestrator — a session that never claimed has no token, there is no fallback) — call claim_orchestrator once; if THAT refusal names another holder, stop and report the holder to the human — repeat write_dayfile calls can never land while it is held — nothing written");
     match claims::write_dayfile(&mut s, "probe", &json!({"content": "body", "orchestrator_token": "wrong-token"})) {
         HandlerResult::Err(msg) => assert_eq!(msg, expected, "a wrong token is the same pinned refusal"),
         HandlerResult::Ok(_) => panic!("a wrong token must be refused"),
@@ -424,7 +428,7 @@ fn dayfile_planted_claim_file_alone_not_valid_per_session_leg_missing() {
         HandlerResult::Err(msg) => {
             assert_eq!(
                 msg,
-                format!("write_dayfile refused: no valid orchestrator_{d} claim — single-writer dayfile"),
+                format!("write_dayfile refused: no valid orchestrator_{d} claim — single-writer dayfile: a claim EXISTS — .claims/orchestrator-{d} is held by session=probe (acquired 2026-09-01T00:00:00Z); the presented token does not form the required double agreement (it must equal both the token recorded in the claim file and the token this session received from its own claim_orchestrator — a session that never claimed has no token, there is no fallback) — call claim_orchestrator once; if THAT refusal names another holder, stop and report the holder to the human — repeat write_dayfile calls can never land while it is held — nothing written"),
                 "a claim file planted on disk alone must draw the exact pinned refusal (the per-session leg is missing)"
             );
         }

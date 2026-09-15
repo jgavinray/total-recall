@@ -318,7 +318,10 @@ const SERVER_VERSION: &str = "0.3.0";
 /// model-facing system prompt per connected server. The tool names are
 /// the harness-generated surface names (`mcp__<server>_<tool>`); the
 /// server registers as `totalrecall`, so they resolve.
-const SERVER_INSTRUCTIONS: &str = "## Memory protocol (MCP: totalrecall)\n- First action of every session: mcp__totalrecall_read_signoff. No work before it returns.\n- Last action before any stop/compact/handoff: mcp__totalrecall_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.\n- Facts come from mcp__totalrecall_recall results (dated) or files — never from your context memory.\n- The server refuses every append path (including log_tick) without the read handshake. If refused, call read_signoff, then retry. Never write memory-root state except through this server's tools.";
+/// Byte-equal to the spec §11 fenced block INCLUDING its trailing
+/// newline (FOUND-4): a client byte-diffing the field against the spec
+/// text must find zero difference.
+const SERVER_INSTRUCTIONS: &str = "## Memory protocol (MCP: totalrecall)\n- First action of every session: mcp__totalrecall_read_signoff. No work before it returns.\n- Last action before any stop/compact/handoff: mcp__totalrecall_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.\n- Facts come from mcp__totalrecall_recall results (dated) or files — never from your context memory.\n- The server refuses every append path (including log_tick) without the read handshake. If refused, call read_signoff, then retry. Never write memory-root state except through this server's tools.\n";
 
 /// `initialize`: negotiate the protocol revision. The server answers with
 /// the requested revision when it implements it (the current `2026-07-28`,

@@ -12,10 +12,12 @@
 //! Pinned semantics (wave-2 contract):
 //! - `gate` refuses EVERY gated tool until `read_signoff` succeeded
 //!   this session. The refusal message is exactly
-//!   `handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.`,
+//!   `handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry. — if read_signoff itself reports the root unprovisioned, that is NOT a call-order problem: provision the root or report to the human (retrying cannot fix it).`,
 //!   restating the rule at the failure moment (spec §4) — emitted identically
 //!   by EVERY gated tool (naive-client round: the private short variant in
-//!   signoff_append was cut over to this shared constant).
+//!   signoff_append was cut over to this shared constant; the FOUND-1 tail
+//!   closes the contradiction with read_signoff's own cold-start error,
+//!   which says retrying cannot fix a missing signoff.md).
 //! - A refused attempt BEFORE the handshake increments
 //!   `server.attempted_write_before_handshake[session]` —
 //!   server-observable, so `session_compliance` can report it
@@ -44,9 +46,12 @@ use crate::rpc::Server;
 
 
 /// The full refusal message a gated tool reports: the pinned text,
-/// restating the rule at the failure moment (spec §4).
+/// restating the rule at the failure moment (spec §4), plus the
+/// FOUND-1 cold-start clause — when `read_signoff` itself reports the
+/// root unprovisioned, the refusal must not instruct a blind retry:
+/// that failure is provisioning, not call order.
 pub const HANDSHAKE_REFUSAL_MESSAGE: &str =
-    "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.";
+    "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry. — if read_signoff itself reports the root unprovisioned, that is NOT a call-order problem: provision the root or report to the human (retrying cannot fix it).";
 
 /// Uniform gate (spec §4): refuse EVERY disk-touching call for a
 /// session that has not yet handshaken.

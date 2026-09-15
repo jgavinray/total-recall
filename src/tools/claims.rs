@@ -34,9 +34,11 @@
 //!   the server's per-session claim_token for the caller's session —
 //!   a claim file planted on disk alone is NOT a valid claim. Any
 //!   other outcome — no claim, an orphan claim, a mismatched or
-//!   missing per-session token — is the exact pinned refusal
+//!   missing per-session token — is the pinned refusal opening
 //!   `write_dayfile refused: no valid orchestrator_<date> claim —
-//!   single-writer dayfile`, decided BEFORE any lock is acquired.
+//!   single-writer dayfile:` — enriched with whether a claim exists
+//!   (holder + acquired time when one is held) and the stop-and-report
+//!   exit — decided BEFORE any lock is acquired.
 //! - On success the day file `YYYY-MM-DD.md` is replaced byte-exact
 //!   and atomically (tmp file + rename, both in the root) under the
 //!   day file's own exclusive `.locks/` lock — the wave-2 lock
@@ -132,7 +134,7 @@ fn claim_orchestrator_tool() -> Tool {
 fn write_dayfile_tool() -> Tool {
     Tool {
         name: "write_dayfile".to_string(),
-        description: "Use this — never a hand edit — to record the day: writes today's day file (YYYY-MM-DD.md, named by the server's LOCAL date, §2) as a SINGLE-WRITER whole-file replace. Pass `orchestrator_token` exactly as today's claim_orchestrator returned it. REFUSES without today's valid orchestrator token ('write_dayfile refused: no valid orchestrator_<date> claim — single-writer dayfile') — call claim_orchestrator once for the day first; if THAT refusal names another holder, stop and report to the human — repeat write_dayfile calls can never land while another session holds the claim; a 'handshake incomplete' refusal means call read_signoff then retry this once. The day files under the memory root are written ONLY through this tool: direct edits bypass the claim gate, the append lock and the audit trail. Never call concurrently with another orchestrator.".to_string(),
+        description: "Use this — never a hand edit — to record the day: writes today's day file (YYYY-MM-DD.md, named by the server's LOCAL date, §2) as a SINGLE-WRITER whole-file replace. Pass `orchestrator_token` exactly as today's claim_orchestrator returned it. REFUSES without today's valid orchestrator token — the refusal opens 'write_dayfile refused: no valid orchestrator_<date> claim — single-writer dayfile:' and names whether today's claim exists (holder + acquired_at when one is held) before giving the exit — call claim_orchestrator once for the day first; if THAT refusal names another holder, stop and report to the human — repeat write_dayfile calls can never land while another session holds the claim; a 'handshake incomplete' refusal means call read_signoff then retry this once. The day files under the memory root are written ONLY through this tool: direct edits bypass the claim gate, the append lock and the audit trail. Never call concurrently with another orchestrator.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -474,10 +476,44 @@ pub fn claim_orchestrator(server: &mut Server, session: &str, args: &Value) -> H
 
 /// The refusal a lost claim race (or a live claim) produces: the
 /// holder is named and the rule restated, and NOTHING is written —
-/// the claim file stays byte-identical (spec §5/§8).
+/// the claim file stays byte-identical (spec §5/§8). The tail is the
+/// stop-and-report exit (FOUND-3): no release tool exists by design,
+/// the only automatic age-out is the orphan takeover once the
+/// unreadable file is `STALE_AFTER` old, and a VALID claim held by
+/// another session does not age out while its date is current — so
+/// the waiting session reports the holder, it never polls.
 fn claim_conflict_refusal(date: &str, holder: &str, acquired_at: &str) -> String {
     format!(
-        "claim_orchestrator refused: orchestrator-{date} is held by session={holder} (acquired {acquired_at}) — a live claim is single-writer: only the holding session may claim that date. The claim file is unchanged; the holder must release (or the claim must age out) before another session may take it"
+        "claim_orchestrator refused: orchestrator-{date} is held by session={holder} (acquired {acquired_at}) — a live claim is single-writer: only the holding session may claim that date. The claim file is unchanged. No release tool exists by design — the exits are the human's: if the holder is not your own session, stop and report the holder session id to the human; do NOT poll or retry. The only automatic age-out is the orphan takeover: a claim file left unreadable by a crashed holder is taken over server-side once it is {} s old; a valid claim held by another session does not age out while its date is current — it retires only when the server's local date rotates past it.",
+        STALE_AFTER.as_secs()
+    )
+}
+
+/// The refusal the day-file token gate draws when the double token
+/// agreement fails (FOUND-2) — never wait-bait. It names WHETHER a
+/// claim exists at all and, when one is held, names the holder and
+/// its `acquired_at` from the same on-disk read the claim decision
+/// uses (the `claim_conflict_refusal` machinery), then carries the
+/// stop-and-report exit so a client deep in a retry loop re-reads
+/// the route from the refusal itself. Decided BEFORE any lock is
+/// acquired, so like every refusal on this path it writes zero bytes.
+fn no_claim_refusal(today: &str, claim: &ClaimRead) -> String {
+    let state = match claim {
+        ClaimRead::Held {
+            holder, acquired_at, ..
+        } => format!(
+            "a claim EXISTS — .claims/orchestrator-{today} is held by session={holder} (acquired {acquired_at}); the presented token does not form the required double agreement (it must equal both the token recorded in the claim file and the token this session received from its own claim_orchestrator — a session that never claimed has no token, there is no fallback)"
+        ),
+        ClaimRead::Orphan => format!(
+            ".claims/orchestrator-{today} exists but is not a readable claim (an orphan from a crashed holder — claim_orchestrator takes it over server-side once it is {} s old)",
+            STALE_AFTER.as_secs()
+        ),
+        ClaimRead::Absent => format!(
+            "no .claims/orchestrator-{today} claim exists and this session holds no claim token for the local date"
+        ),
+    };
+    format!(
+        "write_dayfile refused: no valid orchestrator_{today} claim — single-writer dayfile: {state} — call claim_orchestrator once; if THAT refusal names another holder, stop and report the holder to the human — repeat write_dayfile calls can never land while it is held — nothing written"
     )
 }
 
@@ -687,11 +723,13 @@ fn rotate_stale_claims(root: &Path, today: &str) {
 ///    recorded in `.claims/orchestrator-<today>` (the disk is
 ///    re-read — never a memory map) AND the server's per-session
 ///    claim_token for the caller's session (set by that session's
-///    own `claim_orchestrator`). Any other outcome is the exact
-///    pinned refusal `write_dayfile refused: no valid
-///    orchestrator_<date> claim — single-writer dayfile`, decided
-///    BEFORE any lock is acquired, so the refusal creates neither
-///    lock file nor day file;
+///    own `claim_orchestrator`). Any other outcome is the pinned
+///    refusal opening `write_dayfile refused: no valid
+///    orchestrator_<date> claim — single-writer dayfile:` — the
+///    [`no_claim_refusal`] tail names whether a claim exists
+///    (holder + acquired_at when held) and carries the
+///    stop-and-report exit — decided BEFORE any lock is acquired, so
+///    the refusal creates neither lock file nor day file;
 /// 4. the write itself, under the day file's exclusive `.locks/` lock
 ///    (spec §2 concurrency model): tmp file + atomic rename, then
 ///    release.
@@ -739,17 +777,16 @@ pub fn write_dayfile(server: &mut Server, session: &str, args: &Value) -> Handle
     //    (set by the caller's own claim_orchestrator — a claim
     //    file planted on disk alone is not a claim).
     let claim_path = root.join(CLAIMS_DIR).join(format!("orchestrator-{today}"));
-    let file_token = match read_claim(&claim_path) {
-        ClaimRead::Held { token, .. } => Some(token),
+    let claim = read_claim(&claim_path);
+    let file_token = match &claim {
+        ClaimRead::Held { token, .. } => Some(token.clone()),
         ClaimRead::Absent | ClaimRead::Orphan => None,
     };
     let per_session = server.claim_tokens.get(session).cloned();
     let valid = file_token.as_deref() == Some(token.as_str())
         && per_session.as_deref() == Some(token.as_str());
     if !valid {
-        return HandlerResult::Err(format!(
-            "write_dayfile refused: no valid orchestrator_{today} claim — single-writer dayfile"
-        ));
+        return HandlerResult::Err(no_claim_refusal(&today, &claim));
     }
 
     // 4. The replacement, atomic under the day file's own lock

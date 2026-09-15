@@ -159,7 +159,7 @@ fn refusal_carries_exact_spec_text_and_echoes_id() {
     );
     assert_eq!(
         v["result"]["content"][0]["text"],
-        "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.",
+        "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry. — if read_signoff itself reports the root unprovisioned, that is NOT a call-order problem: provision the root or report to the human (retrying cannot fix it).",
         "the refusal must carry the exact spec §4 text"
     );
 }
@@ -183,7 +183,7 @@ fn initialize_does_not_grant_the_handshake() {
     let v: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(
         v["result"]["content"][0]["text"],
-        "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.",
+        "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry. — if read_signoff itself reports the root unprovisioned, that is NOT a call-order problem: provision the root or report to the human (retrying cannot fix it).",
         "initialize must not open the gate"
     );
 }
@@ -451,7 +451,7 @@ fn newly_reachable_tools_refuse_before_handshake_in_the_pinned_envelope() {
         assert_eq!(v["id"], id, "{name}: the id must round-trip");
         assert_eq!(
             v["result"]["content"][0]["text"],
-            "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry.",
+            "handshake incomplete — call read_signoff first — memory protocol: read_signoff is the first action of every session — call it, then retry. — if read_signoff itself reports the root unprovisioned, that is NOT a call-order problem: provision the root or report to the human (retrying cannot fix it).",
             "{name}: the refusal must carry the exact shared-gate rule text (gate::HANDSHAKE_REFUSAL_MESSAGE)"
         );
         assert_eq!(

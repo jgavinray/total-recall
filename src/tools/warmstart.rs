@@ -73,7 +73,7 @@ pub fn tools() -> Vec<Tool> {
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "Full new warm-start block INCLUDING its own '## If you read nothing else' heading line — the server stores content verbatim and moves the superseded block (heading included) to History. Content without that heading on its own line is REFUSED: the reader ranks only the numbered lines UNDER the heading, so a heading-less block would read back as ranked: [] (naive-client study §3.5)"
+                    "description": "Full new warm-start block INCLUDING its own '## If you read nothing else' heading line — the server stores content verbatim and moves the superseded block (heading included) to History. Content without that heading on its own line is REFUSED: the reader ranks only the numbered lines UNDER the heading, so a heading-less block would read back as ranked: [] (naive-client study §3.5). The success result's warm_start_lines counts EVERY line of the written block INCLUDING its heading — a block of 2 ranked items plus the heading reports warm_start_lines: 3, while read_signoff ranks only the 2 numbered lines UNDER the heading"
                 },
                 "orchestrator_token": {
                     "type": "string",
