@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use totalrecall::rpc::{HandlerResult, Server};
-use totalrecall::tools::signoff_append;
+use total_recall::rpc::{HandlerResult, Server};
+use total_recall::tools::signoff_append;
 use serde_json::json;
 
 /// The on-disk format is a shipped reference (the real `~/dev/exomemory/
@@ -37,7 +37,7 @@ Worker signoff (alpha) | done: yes | unpushed: none | awaits human: none | still
 
 fn tmp_root(name: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!(
-        "totalrecall-w2append-{name}-{}",
+        "total-recall-w2append-{name}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&p);

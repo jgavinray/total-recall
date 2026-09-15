@@ -35,15 +35,15 @@
 //!   the region boundary stays clean (the file ends with a newline,
 //!   the byte-exact expectation is unchanged).
 
-use totalrecall::config;
-use totalrecall::rpc::{HandlerResult, Server};
-use totalrecall::tools::warmstart;
+use total_recall::config;
+use total_recall::rpc::{HandlerResult, Server};
+use total_recall::tools::warmstart;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("totalrecall-warmstart-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("total-recall-warmstart-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -120,7 +120,7 @@ fn seeded(root: &PathBuf) -> Server {
     config::init_state(root).unwrap();
     std::fs::write(root.join("signoff.md"), SEED).unwrap();
     let mut s = Server::new_server(root);
-    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match total_recall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake must succeed on the SEED fixture: {e}"),
     }
@@ -302,7 +302,7 @@ fn warmstart_missing_region_refused() {
     .unwrap();
     let before = std::fs::read(dir.join("signoff.md")).unwrap();
     let mut s = Server::new_server(&dir);
-    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match total_recall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake: {e}"),
     }
@@ -335,7 +335,7 @@ fn warmstart_missing_file_refused_no_file_created() {
     // delete it: the in-process handshake survives, so the call
     // reaches the under-lock read — where the absence is detected.
     std::fs::write(dir.join("signoff.md"), SEED).unwrap();
-    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match total_recall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake: {e}"),
     }
@@ -392,7 +392,7 @@ fn warmstart_history_absent_created_at_eof() {
     )
     .unwrap();
     let mut s = Server::new_server(&dir);
-    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match total_recall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake: {e}"),
     }
@@ -435,7 +435,7 @@ fn warmstart_history_ends_at_next_heading() {
     .unwrap();
     let before = std::fs::read(dir.join("signoff.md")).unwrap();
     let mut s = Server::new_server(&dir);
-    match totalrecall::tools::signoff_read::read_signoff(&mut s, "probe") {
+    match total_recall::tools::signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(e) => panic!("handshake: {e}"),
     }

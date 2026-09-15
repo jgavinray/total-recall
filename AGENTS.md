@@ -1,4 +1,4 @@
-# AGENTS.md — working ON totalrecall
+# AGENTS.md — working ON total-recall
 
 Orientation for an agent editing this software (not using it — for that, read
 `README.md` and `spec.md`).
@@ -25,8 +25,8 @@ Orientation for an agent editing this software (not using it — for that, read
 
 ## Naming boundary (human ruling 2026-09-14, spec.md top)
 
-- The product is **totalrecall** (crate, binary, MCP registration key,
-  `mcp__totalrecall_*` surface). **exomemory** names the design pattern /
+- The product is **total-recall** (crate, binary, MCP registration key,
+  `mcp__total_recall_*` surface). **exomemory** names the design pattern /
   memory-root instance the server manages — different systems; the server's
   identity never borrows the pattern's name.
 - Frozen contract names in the exomemory namespace stay as they are:
@@ -38,7 +38,7 @@ Orientation for an agent editing this software (not using it — for that, read
 - Per change: `cargo test` (135 passing, 15 binaries; the real-time lock/race
   test in `signoff_append_tests.rs` can flake under load, passes in isolation).
 - Release changes: `cargo build --release` and run
-  `target/release/totalrecall --root <path> --self-check` (one JSON line, exit 0).
+  `target/release/total-recall --root <path> --self-check` (one JSON line, exit 0).
 - Surface changes (descriptions, refusals, tool shapes): a naive-model smoke —
   drive the binary over stdio with a naive client and confirm the refusal
   texts route a model that follows them literally to the right exit.

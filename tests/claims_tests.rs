@@ -36,16 +36,16 @@
 //! - Every expected date is derived from `claims::local_date` (the
 //!   root's recorded timezone fingerprint, §2) — never hardcoded.
 
-use totalrecall::config;
-use totalrecall::gate::HANDSHAKE_REFUSAL_MESSAGE;
-use totalrecall::rpc::{HandlerResult, Server};
-use totalrecall::tools::{claims, signoff_read};
+use total_recall::config;
+use total_recall::gate::HANDSHAKE_REFUSAL_MESSAGE;
+use total_recall::rpc::{HandlerResult, Server};
+use total_recall::tools::{claims, signoff_read};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("totalrecall-claims-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("total-recall-claims-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p

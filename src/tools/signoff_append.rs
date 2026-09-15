@@ -592,13 +592,13 @@ fn release_lock(root: &Path, token: &LockToken) {
     ];
     if !matches.iter().all(|(a, b)| a.as_deref() == b.as_deref()) {
         eprintln!(
-            "[totalrecall] append_signoff: .locks/{LOCK_NAME} changed under us (holder record no longer matches) — leaving it for its current holder"
+            "[total-recall] append_signoff: .locks/{LOCK_NAME} changed under us (holder record no longer matches) — leaving it for its current holder"
         );
         return;
     }
     if let Err(e) = std::fs::remove_file(&path) {
         eprintln!(
-            "[totalrecall] append_signoff: could not remove our .locks/{LOCK_NAME} ({e}) — the stale takeover will reclaim it"
+            "[total-recall] append_signoff: could not remove our .locks/{LOCK_NAME} ({e}) — the stale takeover will reclaim it"
         );
     }
 }
@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn stale_takeover_never_removes_a_successors_fresh_lock() {
         let dir = std::env::temp_dir().join(format!(
-            "totalrecall-f2-signoff-{}-takeover",
+            "total-recall-f2-signoff-{}-takeover",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

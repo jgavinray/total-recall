@@ -1,17 +1,16 @@
 [package]
-name = "totalrecall"
+name = "total-recall"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-2.0"
-description = "totalrecall — markdown side-band memory enforced over the buckets it owns"
+description = "total-recall — markdown side-band memory enforced over the buckets it owns"
 
 [dependencies]
 serde_json = "1"
 
 [lib]
-name = "totalrecall"
 path = "src/lib.rs"
 
 [[bin]]
-name = "totalrecall"
+name = "total-recall"
 path = "src/main.rs"

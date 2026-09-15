@@ -15,8 +15,8 @@
 //!   isError:true + content array (never a JSON-RPC error object).
 //! - Fresh configured root starts EMPTY: only `.state/` exists after init.
 
-use totalrecall::config::{self, ConfigArgs};
-use totalrecall::rpc::{self, Server};
+use total_recall::config::{self, ConfigArgs};
+use total_recall::rpc::{self, Server};
 use serde_json::json;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,7 +30,7 @@ fn env_release() {
     ENV_SPIN.store(0, Ordering::Release);
 }
 fn tmp_root(name: &str) -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!("totalrecall-gate-w1-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("total-recall-gate-w1-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p

@@ -3,13 +3,13 @@ title: Total Recall MCP Server — Spec
 type: spec
 status: v0.3 (2026-09-14)
 author: orchestrated assistant for the human
-tags: [totalrecall, exomemory, mcp, memory, omp, agentic-engineering]
+tags: [total-recall, exomemory, mcp, memory, omp, agentic-engineering]
 updated: 2026-09-14
 ---
 
 # Total Recall MCP Server — Spec v0.3
 
-**Naming (human ruling, 2026-09-14):** the project is **Total Recall** (crate/binary `totalrecall`, MCP registration `totalrecall`, tool surface `mcp__totalrecall_<tool>`). "exomemory" names the *design pattern / memory-root instance* the server manages (`~/dev/exomemory/` is only the reference deployment's default root, §2) — the two systems are distinct and the server's identity never borrows the pattern's name. Retained in the exomemory namespace, deliberately: the memory-root contract surface (`EXOMEMORY_DIR`/`EXO_*` env names, the guard), the on-disk bucket layout under the configured root (`.claims/`, `.audit/`, `.locks/`, `.state/`, `.index/`), and every prose reference to the pattern. Distinct from the abandoned prior art `total-recall` (hyphenated, `~/dev/memory/`, §9) — this project inherits nothing from it.
+**Naming (human ruling, 2026-09-14):** the project is **total-recall** — package/binary `total-recall` (Rust crate `total_recall`), MCP registration key `total-recall`, tool surface `mcp__total_recall_<tool>` (omp sanitizes non-`[a-z_]` chars to `_`), `serverInfo.name` `total-recall`. "exomemory" names the *design pattern / memory-root instance* the server manages — different systems; the server's identity never borrows the pattern's name. Retained in the exomemory namespace, deliberately: the memory-root contract surface (`EXOMEMORY_DIR`/`EXO_*` env names, the guard), the on-disk bucket layout under the configured root (`.claims/`, `.audit/`, `.locks/`, `.state/`, `.index/`), and every prose reference to the pattern. The §9 prior-art survey (`~/dev/memory/total-recall`) is a separate project that happens to share the name; this one inherits nothing from it.
 
 Single-binary MCP server that turns the side-band memory pattern — markdown files under a **configured memory root** (default `~/dev/exomemory/`, §2 Configuration) — into an enforced API for the buckets it owns. Drafted 2026-09-13; v0.2 reconciles v0.1 with the shipped enforcement plane and the real on-disk format; the build is **authorized** by the human 2026-09-13 (§12).
 
@@ -395,15 +395,15 @@ The standing rules the server does **not** enforce — each stays with its shipp
 ## 11. Prompt layer (the only prompt that should exist — verbatim)
 
 ```text
-## Memory protocol (MCP: totalrecall)
-- First action of every session: mcp__totalrecall_read_signoff. No work before it returns.
-- Last action before any stop/compact/handoff: mcp__totalrecall_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.
-- Facts come from mcp__totalrecall_recall results (dated) or files — never from your context memory.
+## Memory protocol (MCP: total-recall)
+- First action of every session: mcp__total_recall_read_signoff. No work before it returns.
+- Last action before any stop/compact/handoff: mcp__total_recall_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.
+- Facts come from mcp__total_recall_recall results (dated) or files — never from your context memory.
 - The server refuses every append path (including log_tick) without the read handshake. If refused, call read_signoff, then retry. Never write memory-root state except through this server's tools.
 ```
 (4 lines; brevity is compliance. Tool surface names follow omp's pinned convention `mcp__<server>_<tool>` — the tool bridge generates `mcp__<sanitized_server_name>_<sanitized_tool_name>` (`omp://mcp-server-tool-authoring.md` §4); the doubled-separator `mcp__server__tool` form seen elsewhere belongs to a different harness (Claude Code), not omp.)
 
-**Delivery channel (decided 2026-09-14, naive-client round):** this text rides the protocol, not a config file — the `initialize` result carries it verbatim as the MCP-standard `instructions` field (MCP 2025-06-18+ init-result field), which omp's client injects into the model-facing system prompt per connected server (`client.ts` init capture → `manager.ts getServerInstructions` → `sdk.ts rebuildSystemPrompt`, 4000-char cap; no mcp.json instructions key exists). Pinned line-by-line in `tests/rpc_tests.rs` (`initialize_result_carries_serverinfo_and_tools_only_capabilities`); the server registers as `totalrecall` in `~/.omp/agent/mcp.json`, so the `mcp__totalrecall_*` names resolve.
+**Delivery channel (decided 2026-09-14, naive-client round):** this text rides the protocol, not a config file — the `initialize` result carries it verbatim as the MCP-standard `instructions` field (MCP 2025-06-18+ init-result field), which omp's client injects into the model-facing system prompt per connected server (`client.ts` init capture → `manager.ts getServerInstructions` → `sdk.ts rebuildSystemPrompt`, 4000-char cap; no mcp.json instructions key exists). Pinned line-by-line in `tests/rpc_tests.rs` (`initialize_result_carries_serverinfo_and_tools_only_capabilities`); the server registers as `total-recall` in `~/.omp/agent/mcp.json`, so the `mcp__total_recall_*` names resolve.
 
 ## 12. Roadmap & build trigger
 
@@ -484,3 +484,5 @@ Product naming round (2026-09-14) — human ruling: **the project is Total Recal
 FOUND-residuals round (2026-09-14) — six wording-level residuals from the post-fix re-measurement (/private/tmp/naive-client-post/REMEASURE.md), fixed in code and re-smoked live (suite 135/0 verified by orchestrator re-run — the worker's reported "145" miscounted its own per-binary list; frames under /tmp/found-nit-smoke/): FOUND-1 the shared gate refusal gained a closing clause (if read_signoff itself reports the root unprovisioned, that is NOT a call-order problem — provision or report; retrying cannot fix it) — pinned prefix byte-intact, §4 example + pseudocode synced verbatim; FOUND-2 the `write_dayfile` token refusal now names the disk-truth state (no claim / held by session=<holder> with acquired_at / orphan pending takeover) and the stop-and-report exit, decided before any lock, zero bytes, three exact claims_tests pins updated; FOUND-3 the claim-conflict refusal states the REAL age-out (the 30 s orphan takeover only — a valid held claim never ages out while its date is current) and that no release tool exists by design; FOUND-4 `SERVER_INSTRUCTIONS` now byte-equal to §11's fenced block INCLUDING the trailing newline (585 B = 585 B on the wire); FOUND-5 `session_compliance` documents the refused_count scope (pre-handshake gate refusals only; post-handshake claim refusals are tool results, never counted); FOUND-6 `warm_start_lines` documented as counting the heading line.
 
 Tick cadence ruling (2026-09-14, delegated to the orchestrator by the human): the pattern's "~30 min" is the EMISSION cadence (a watcher calls `log_tick` at least that often); the server's silence window stays **45 min** — the alarm threshold deliberately sits at 1.5× the rhythm so one skipped beat never cries wolf while genuine death is caught inside 45 minutes (standard watchdog practice: period + grace, one knob each). The two numbers are not in conflict; they are the snooze and the alarm. Test 11's pinned boundary stands.
+
+Naming correction round (2026-09-14) — human ruling: the project spells **total-recall** (hyphenated); the un-hyphenated form of the naming round is retired. Cutover across the identity surface: package/binary `total-recall` (crate `total_recall`), `serverInfo.name`, mcp.json key `total-recall`, §11 references `mcp__total_recall_*` (omp sanitization: lowercase, non-`[a-z_]`→`_`, collapses), stderr prefix `[total-recall]`, README/AGENTS.md/wiki, GitHub repo. Pattern-layer contract names untouched (`EXOMEMORY_DIR`/`EXO_*`, dot-dirs) — they belong to the exomemory system, not the product. §11 byte-equality re-pinned in rpc_tests (585-class byte-compare re-run live).

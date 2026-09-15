@@ -581,7 +581,7 @@ fn report_disagrees(root: &Path, snapshot: &Snapshot) {
         let read: Vec<&str> = current.lines.iter().map(String::as_str).collect();
         if recorded != read {
             eprintln!(
-                "[totalrecall] index: {INDEX_DIR}/{MANIFEST_NAME} claims to describe {path:?} AT ITS CURRENT FINGERPRINT yet its entry list disagrees with those bytes — the report is never served as fact; it is being rewritten from disk"
+                "[total-recall] index: {INDEX_DIR}/{MANIFEST_NAME} claims to describe {path:?} AT ITS CURRENT FINGERPRINT yet its entry list disagrees with those bytes — the report is never served as fact; it is being rewritten from disk"
             );
         }
     }
@@ -595,20 +595,20 @@ fn report_disagrees(root: &Path, snapshot: &Snapshot) {
 fn persist(root: &Path, snapshot: &Snapshot) {
     let dir = root.join(INDEX_DIR);
     if let Err(err) = std::fs::create_dir_all(&dir) {
-        eprintln!("[totalrecall] index: cannot create {INDEX_DIR}/: {err} — report skipped");
+        eprintln!("[total-recall] index: cannot create {INDEX_DIR}/: {err} — report skipped");
         return;
     }
     let token = match acquire_lock(root, LOCK_NAME, "index") {
         Ok(token) => token,
         Err(err) => {
-            eprintln!("[totalrecall] index: {err} — report skipped");
+            eprintln!("[total-recall] index: {err} — report skipped");
             return;
         }
     };
     let body = match serde_json::to_string_pretty(&snapshot.manifest_json(root)) {
         Ok(body) => body,
         Err(err) => {
-            eprintln!("[totalrecall] index: cannot serialize the derived report: {err} — report skipped");
+            eprintln!("[total-recall] index: cannot serialize the derived report: {err} — report skipped");
             release_lock(root, &token, LOCK_NAME, "index");
             return;
         }
@@ -633,7 +633,7 @@ fn persist(root: &Path, snapshot: &Snapshot) {
     })();
     if let Err(err) = outcome {
         let _ = std::fs::remove_file(&tmp);
-        eprintln!("[totalrecall] index: {err} — report skipped");
+        eprintln!("[total-recall] index: {err} — report skipped");
     }
     release_lock(root, &token, LOCK_NAME, "index");
 }
@@ -870,13 +870,13 @@ pub(crate) fn release_lock(root: &Path, token: &LockToken, lock_name: &str, who:
     .all(|(key, want)| parse_lock_field(&contents, key) == Some(want.as_str()));
     if !ours {
         eprintln!(
-            "[totalrecall] {who}: .locks/{lock_name} no longer records this acquisition — not removed (a successor's lock)"
+            "[total-recall] {who}: .locks/{lock_name} no longer records this acquisition — not removed (a successor's lock)"
         );
         return;
     }
     if let Err(err) = std::fs::remove_file(&path) {
         eprintln!(
-            "[totalrecall] {who}: could not release .locks/{lock_name}: {err} — it will be reclaimed once stale"
+            "[total-recall] {who}: could not release .locks/{lock_name}: {err} — it will be reclaimed once stale"
         );
     }
 }

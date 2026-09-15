@@ -1,4 +1,4 @@
-# totalrecall — workflow diagrams
+# total-recall — workflow diagrams
 
 Companion view to `spec.md` (v0.3): how the workflows actually run, as built in commit 0a1a4b1.
 The load-bearing reading: diagrams 2 and 3 encode the two invariants everything else hangs on —

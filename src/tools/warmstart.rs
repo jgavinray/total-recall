@@ -503,7 +503,7 @@ fn rewrite_under_lock(root: &Path, content: &str) -> Result<Value, String> {
         match std::fs::write(&tmp, original.as_slice()).and_then(|_| std::fs::rename(&tmp, &path)) {
             Ok(()) => {}
             Err(e) => eprintln!(
-                "[totalrecall] write_warm_start: could not restore the original signoff.md ({e}) — the file on disk is the unverified rewrite"
+                "[total-recall] write_warm_start: could not restore the original signoff.md ({e}) — the file on disk is the unverified rewrite"
             ),
         }
         let _ = std::fs::remove_file(&tmp);
@@ -810,13 +810,13 @@ fn release_lock(root: &Path, token: &LockToken) {
     ];
     if !matches.iter().all(|(a, b)| a.as_deref() == b.as_deref()) {
         eprintln!(
-            "[totalrecall] write_warm_start: .locks/{LOCK_NAME} changed under us (holder record no longer matches) — leaving it for its current holder"
+            "[total-recall] write_warm_start: .locks/{LOCK_NAME} changed under us (holder record no longer matches) — leaving it for its current holder"
         );
         return;
     }
     if let Err(e) = std::fs::remove_file(&path) {
         eprintln!(
-            "[totalrecall] write_warm_start: could not remove our .locks/{LOCK_NAME} ({e}) — the stale takeover will reclaim it"
+            "[total-recall] write_warm_start: could not remove our .locks/{LOCK_NAME} ({e}) — the stale takeover will reclaim it"
         );
     }
 }

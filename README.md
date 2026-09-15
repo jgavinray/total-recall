@@ -1,4 +1,4 @@
-# totalrecall
+# total-recall
 
 A single-binary MCP server (JSON-RPC 2.0 over stdio) that turns the Exomemory
 Pattern — markdown side-band memory under one configured root, shared by an
@@ -26,8 +26,8 @@ README is a doorway, not one.
 ## Build & run
 
 ```sh
-cargo build --release                              # binary: target/release/totalrecall
-target/release/totalrecall --root <path> --self-check
+cargo build --release                              # binary: target/release/total-recall
+target/release/total-recall --root <path> --self-check
 ```
 
 `--self-check` resolves the memory root, runs the init-fingerprint startup gate,
@@ -40,9 +40,9 @@ Register in `~/.omp/agent/mcp.json` under `mcpServers` — this shape is taken
 from the real file (which also carries an unrelated `kaibo` registration):
 
 ```json
-"totalrecall": {
+"total-recall": {
   "timeout": 60000,
-  "command": "<absolute path to this repo>/target/release/totalrecall",
+  "command": "<absolute path to this repo>/target/release/total-recall",
   "args": [
     "--root",
     "<absolute path to your memory root>"
@@ -73,14 +73,14 @@ deployment's working entry lives in `~/.omp/agent/mcp.json`.
    ```
 
 3. Register the server (snippet above) and start a session on that root.
-4. First call, always: `mcp__totalrecall_read_signoff` — it grants the
+4. First call, always: `mcp__total_recall_read_signoff` — it grants the
    handshake; every gated tool refuses until it has succeeded this session.
    Only `read_signoff`, `recall`, `last_tick`, `session_compliance` are ungated.
-5. Orchestrator flow: `mcp__totalrecall_claim_orchestrator {date}` to take
-   today's single-writer token, then `mcp__totalrecall_write_dayfile {content,
+5. Orchestrator flow: `mcp__total_recall_claim_orchestrator {date}` to take
+   today's single-writer token, then `mcp__total_recall_write_dayfile {content,
    orchestrator_token}` to record the day (`write_brief` / `write_warm_start`
    are claim-gated too).
-6. Worker flow: end every session with `mcp__totalrecall_append_signoff
+6. Worker flow: end every session with `mcp__total_recall_append_signoff
    {role, workflow, done, …}` — one verbatim line, appended under an exclusive
    lock.
 7. Acceptance — the kill-test: kill any session mid-run and lose only the last

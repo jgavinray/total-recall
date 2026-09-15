@@ -22,14 +22,14 @@
 //!   tail must be byte-identical or the tool fails LOUDLY and keeps the old file.
 //! - Every refusal asserts absence of side effects (byte-identical/absent target).
 
-use totalrecall::config;
-use totalrecall::rpc::{HandlerResult, Server};
-use totalrecall::tools::{briefs, claims, warmstart};
+use total_recall::config;
+use total_recall::rpc::{HandlerResult, Server};
+use total_recall::tools::{briefs, claims, warmstart};
 use serde_json::json;
 use std::path::PathBuf;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("totalrecall-gate-w3-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("total-recall-gate-w3-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -39,7 +39,7 @@ fn seeded(root: &PathBuf) -> Server {
     config::init_state(root).unwrap();
     std::fs::write(root.join("signoff.md"), SEED).unwrap();
     let mut s = Server::new_server(root);
-    let _ = totalrecall::tools::signoff_read::read_signoff(&mut s, "probe");
+    let _ = total_recall::tools::signoff_read::read_signoff(&mut s, "probe");
     s
 }
 /// The server's LOCAL date, derived from `config::resolve_tz()` (the same
@@ -118,8 +118,8 @@ fn claim_other_session_refused_with_holder_and_file_unchanged() {
     // claim_orchestrator IS gated (spec §4): both claim sessions must handshaken
     // first, otherwise a correct implementation refuses with the handshake text
     // and the claim file would never exist.
-    let _ = totalrecall::tools::signoff_read::read_signoff(&mut s, "holder");
-    let _ = totalrecall::tools::signoff_read::read_signoff(&mut s, "intruder");
+    let _ = total_recall::tools::signoff_read::read_signoff(&mut s, "holder");
+    let _ = total_recall::tools::signoff_read::read_signoff(&mut s, "intruder");
     let _ = claims::claim_orchestrator(&mut s, "holder", &json!({}));
     let date = local_date();
     let before = std::fs::read(dir.join(format!(".claims/orchestrator-{date}"))).unwrap();

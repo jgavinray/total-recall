@@ -435,7 +435,7 @@ pub fn claim_orchestrator(server: &mut Server, session: &str, args: &Value) -> H
             Some(a) if a >= STALE_AFTER => {
                 let _ = std::fs::remove_file(&path);
                 eprintln!(
-                    "[totalrecall] claim_orchestrator: .claims/orchestrator-{date} was orphaned (holder crashed before publishing) and is {a:?} old — taken over server-side"
+                    "[total-recall] claim_orchestrator: .claims/orchestrator-{date} was orphaned (holder crashed before publishing) and is {a:?} old — taken over server-side"
                 );
                 let mut res = create_fresh_claim(&claims_dir, &path, session, &date);
                 // A takeover makes THIS session the holder: the
@@ -696,16 +696,16 @@ fn rotate_stale_claims(root: &Path, today: &str) {
             continue; // valid and current-or-future: stays
         }
         if let Err(e) = std::fs::create_dir_all(&archive_dir) {
-            eprintln!("[totalrecall] claim_orchestrator: cannot create .claims/archive/: {e} — stale claim {name} left in place");
+            eprintln!("[total-recall] claim_orchestrator: cannot create .claims/archive/: {e} — stale claim {name} left in place");
             continue;
         }
         let target = archive_dir.join(&file_name);
         if target.exists() {
-            eprintln!("[totalrecall] claim_orchestrator: .claims/archive/{name} already exists — the stale claim is left in place (archives are never overwritten)");
+            eprintln!("[total-recall] claim_orchestrator: .claims/archive/{name} already exists — the stale claim is left in place (archives are never overwritten)");
             continue;
         }
         if let Err(e) = std::fs::rename(&entry.path(), &target) {
-            eprintln!("[totalrecall] claim_orchestrator: could not rotate stale claim .claims/{name} to the archive: {e} — left in place");
+            eprintln!("[total-recall] claim_orchestrator: could not rotate stale claim .claims/{name} to the archive: {e} — left in place");
         }
     }
 }
@@ -1120,12 +1120,12 @@ fn release_lock(root: &Path, token: &LockToken, lock_name: &str) {
     .all(|(name, want)| parse_lock_field(&content, name).map(|got| got == want).unwrap_or(false));
     if !ours {
         eprintln!(
-            "[totalrecall] write_dayfile: .locks/{lock_name} no longer records this acquisition — not removed (a successor's lock)"
+            "[total-recall] write_dayfile: .locks/{lock_name} no longer records this acquisition — not removed (a successor's lock)"
         );
         return;
     }
     if let Err(e) = std::fs::remove_file(&path) {
-        eprintln!("[totalrecall] write_dayfile: could not release .locks/{lock_name}: {e} — it will be reclaimed once stale");
+        eprintln!("[total-recall] write_dayfile: could not release .locks/{lock_name}: {e} — it will be reclaimed once stale");
     }
 }
 

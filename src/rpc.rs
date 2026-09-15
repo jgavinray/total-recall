@@ -309,19 +309,19 @@ fn invalid_request_frame(id: Value, message: &str) -> String {
 
 /// Identity the server reports in the `initialize` result (MCP requires
 /// `serverInfo`): the bin name, versioned with spec.md (v0.3).
-const SERVER_NAME: &str = "totalrecall";
+const SERVER_NAME: &str = "total-recall";
 const SERVER_VERSION: &str = "0.3.0";
 
 /// The spec §11 prompt layer — "the only prompt that should exist" —
 /// delivered VERBATIM on the MCP-native channel: omp's client reads
 /// `instructions` off the initialize result and injects it into the
 /// model-facing system prompt per connected server. The tool names are
-/// the harness-generated surface names (`mcp__<server>_<tool>`); the
-/// server registers as `totalrecall`, so they resolve.
+/// the harness-generated surface names: the server registers as
+/// `total-recall` and omp sanitizes (`mcp__total_recall_*`), so they resolve.
 /// Byte-equal to the spec §11 fenced block INCLUDING its trailing
 /// newline (FOUND-4): a client byte-diffing the field against the spec
 /// text must find zero difference.
-const SERVER_INSTRUCTIONS: &str = "## Memory protocol (MCP: totalrecall)\n- First action of every session: mcp__totalrecall_read_signoff. No work before it returns.\n- Last action before any stop/compact/handoff: mcp__totalrecall_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.\n- Facts come from mcp__totalrecall_recall results (dated) or files — never from your context memory.\n- The server refuses every append path (including log_tick) without the read handshake. If refused, call read_signoff, then retry. Never write memory-root state except through this server's tools.\n";
+const SERVER_INSTRUCTIONS: &str = "## Memory protocol (MCP: total-recall)\n- First action of every session: mcp__total_recall_read_signoff. No work before it returns.\n- Last action before any stop/compact/handoff: mcp__total_recall_append_signoff {role, workflow, done, unpushed, awaits_human, still_running, kaibo_review}.\n- Facts come from mcp__total_recall_recall results (dated) or files — never from your context memory.\n- The server refuses every append path (including log_tick) without the read handshake. If refused, call read_signoff, then retry. Never write memory-root state except through this server's tools.\n";
 
 /// `initialize`: negotiate the protocol revision. The server answers with
 /// the requested revision when it implements it (the current `2026-07-28`,
@@ -372,7 +372,7 @@ fn tools_list_result(server: &Server) -> Value {
 pub fn serve_stdio(root: &Path) -> i32 {
     let mut server = Server::new_server(root);
     eprintln!(
-        "[totalrecall] session {} — JSON-RPC 2.0 over stdio (root: {})",
+        "[total-recall] session {} — JSON-RPC 2.0 over stdio (root: {})",
         server.session_id,
         server.root.display()
     );
@@ -382,7 +382,7 @@ pub fn serve_stdio(root: &Path) -> i32 {
         let line = match line {
             Ok(line) => line,
             Err(err) => {
-                eprintln!("[totalrecall] stdin read error: {err}");
+                eprintln!("[total-recall] stdin read error: {err}");
                 return 1;
             }
         };
@@ -393,15 +393,15 @@ pub fn serve_stdio(root: &Path) -> i32 {
             Ok(frame) => {
                 if !frame.is_empty() {
                     if let Err(err) = writeln!(std::io::stdout(), "{frame}") {
-                        eprintln!("[totalrecall] stdout write error: {err}");
+                        eprintln!("[total-recall] stdout write error: {err}");
                         return 1;
                     }
                 }
             }
             Err(frame) => {
-                eprintln!("[totalrecall] protocol error frame: {frame}");
+                eprintln!("[total-recall] protocol error frame: {frame}");
                 if let Err(err) = writeln!(std::io::stdout(), "{frame}") {
-                    eprintln!("[totalrecall] stdout write error: {err}");
+                    eprintln!("[total-recall] stdout write error: {err}");
                     return 1;
                 }
             }

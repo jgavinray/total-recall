@@ -17,15 +17,15 @@
 //!   under an `O_CREAT|O_EXCL` lock file in `.locks/`; >16384 B refused with ZERO bytes written.
 //! - Two racing appends (one process) and two server processes on one root both serialize.
 
-use totalrecall::config;
-use totalrecall::gate;
-use totalrecall::rpc::{HandlerResult, Server};
-use totalrecall::tools::{signoff_append, signoff_read};
+use total_recall::config;
+use total_recall::gate;
+use total_recall::rpc::{HandlerResult, Server};
+use total_recall::tools::{signoff_append, signoff_read};
 use serde_json::json;
 use std::path::PathBuf;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("totalrecall-gate-w2-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("total-recall-gate-w2-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -246,7 +246,7 @@ fn two_server_processes_on_one_root_serialize() {
     let dir = tmp_root("twoproc");
     config::init_state(&dir).unwrap();
     seed(&dir);
-    let bin = std::env::var("CARGO_BIN_EXE_totalrecall").expect("cargo test builds the bin target");
+    let bin = std::env::var("CARGO_BIN_EXE_total-recall").expect("cargo test builds the bin target");
     let frames_a = format!(
         "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2026-07-28\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"a\",\"version\":\"0\"}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"read_signoff\",\"arguments\":{{}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"append_signoff\",\"arguments\":{{\"role\":\"procA\",\"workflow\":\"wf-a\",\"done\":\"yes\",\"unpushed\":\"none\",\"awaits_human\":\"none\",\"still_running\":\"no\"}}}}}}\n"
     );

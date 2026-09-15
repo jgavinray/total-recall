@@ -4,7 +4,7 @@
 //!
 //! Adaptations, stated rather than hidden:
 //! - **15 is genuinely cross-process**: the writer is the REAL
-//!   `totalrecall` binary over stdio (the tool already wired today,
+//!   `total-recall` binary over stdio (the tool already wired today,
 //!   `append_signoff`), and the reader is `recall` in this process on the
 //!   same root — the pair the spec's "no divergence served" claim is
 //!   actually about. A frame test for the wave-4 tools themselves cannot
@@ -32,11 +32,11 @@ use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use totalrecall::config;
-use totalrecall::rpc::{HandlerResult, Server};
-use totalrecall::tools::index::{self, FORMAT_VERSION, INDEX_DIR, MANIFEST_NAME};
-use totalrecall::tools::recall::recall;
-use totalrecall::tools::ticks;
+use total_recall::config;
+use total_recall::rpc::{HandlerResult, Server};
+use total_recall::tools::index::{self, FORMAT_VERSION, INDEX_DIR, MANIFEST_NAME};
+use total_recall::tools::recall::recall;
+use total_recall::tools::ticks;
 use serde_json::{json, Value};
 
 /// The worker-signoff bucket, in the shipped line format.
@@ -63,7 +63,7 @@ const BUCKETS: [&str; 3] = ["signoff.md", "2026-09-13.md", "briefs/parser.md"];
 const OUTSIDE: &str = "Parser edge BLOCKED and Decision: quilt-marker content from outside the buckets\n";
 
 fn root_for(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("totalrecall-index-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("total-recall-index-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -326,7 +326,7 @@ fn t15_two_processes_one_root_the_reader_never_diverges() {
 
     // Process B: the REAL binary, its own handshake, its own append, over
     // stdio on the same root.
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_totalrecall"))
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_total-recall"))
         .arg("--root")
         .arg(dir.display().to_string())
         .env_remove("EXOMEMORY_DIR")
