@@ -232,6 +232,35 @@ fn serialize_line(
     line
 }
 
+/// The reserved field names of the one-line entry: the guard and the
+/// launcher parse the line field-by-field, keying on these verbatim names.
+const RESERVED_FIELD_NAMES: [&str; 8] = [
+    "done:",
+    "unpushed:",
+    "awaits human:",
+    "still running:",
+    "workflow:",
+    "ts:",
+    "session:",
+    "kaibo review:",
+];
+
+/// The first reserved field name that appears in `value` directly after the
+/// field separator `|` — with or without whitespace between them — if any.
+/// Newlines are already refused, so whitespace here is spaces (and tabs):
+/// any gap a field-splitting reader trims away still forges a field.
+fn separator_then_reserved_name(value: &str) -> Option<&'static str> {
+    for (sep, _) in value.match_indices('|') {
+        let after = value[sep + '|'.len_utf8()..].trim_start_matches(char::is_whitespace);
+        for &name in &RESERVED_FIELD_NAMES {
+            if after.starts_with(name) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
 /// Schema validation (spec §3 `append_signoff` schema) plus the
 /// format invariants the schema cannot express: the entry is exactly ONE
 /// line, and `role` must keep the fixed token `Worker signoff (<role>)`
@@ -292,6 +321,26 @@ fn parse_args(
     ] {
         if value.contains('\n') || value.contains('\r') {
             return Err(format!("append_signoff refused: '{field}' contains a newline — the entry is exactly ONE line"));
+        }
+    }
+
+    // The six free-text fields are emitted verbatim between the `| ` field
+    // separators; a separator followed by one of the reserved field names
+    // would be parsed by the guard and launcher as a field of the entry
+    // (e.g. `unpushed: "x | done: yes"` reads as a forged `done: yes`).
+    // Refused rather than escaped — readers key on the names verbatim.
+    for (field, value) in [
+        ("role", role.as_str()),
+        ("workflow", workflow.as_str()),
+        ("unpushed", unpushed.as_str()),
+        ("awaits_human", awaits_human.as_str()),
+        ("still_running", still_running.as_str()),
+        ("kaibo_review", kaibo_review.as_deref().unwrap_or("")),
+    ] {
+        if let Some(name) = separator_then_reserved_name(value) {
+            return Err(format!(
+                "append_signoff refused: '{field}' contains '|' followed by the reserved field name '{name}' — readers parse the entry field-by-field and would read a forged field"
+            ));
         }
     }
 
