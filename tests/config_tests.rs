@@ -24,25 +24,24 @@
 //! - a fingerprint naming a different root refusing loudly (the gate
 //!   forges `tz`; this forges `root`).
 
-use total_recall::config::{self, ConfigArgs};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use total_recall::config::{self, ConfigArgs};
 
 // Test threads share one process: every test that reads or writes the
 // root/env environment (or `$HOME`) serializes on this.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-    ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// A scratch root under the system temp dir, re-created fresh (named
 /// per test so parallel tests never share a directory).
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!(
-        "total-recall-cfg-{name}-{}",
-        std::process::id()
-    ));
+    let p = std::env::temp_dir().join(format!("total-recall-cfg-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -62,7 +61,10 @@ fn exo_dir_legacy_alias_answers_when_canonical_unset() {
     clear_root_env();
     std::env::set_var("EXO_DIR", dir.display().to_string());
     let cfg = config::resolve_root(&ConfigArgs { cli_root: None }).unwrap();
-    assert_eq!(cfg, dir, "the legacy EXO_DIR tier must answer the root on its own");
+    assert_eq!(
+        cfg, dir,
+        "the legacy EXO_DIR tier must answer the root on its own"
+    );
     clear_root_env();
 }
 
@@ -95,14 +97,20 @@ fn env_divergence_names_both_variables_and_flag_cannot_paper_over_it() {
         err.contains("EXOMEMORY_DIR"),
         "the refusal must name the canonical variable: {err}"
     );
-    assert!(err.contains("EXO_DIR"), "the refusal must name the legacy alias: {err}");
+    assert!(
+        err.contains("EXO_DIR"),
+        "the refusal must name the legacy alias: {err}"
+    );
 
     // Contract: the divergence is refused even when a flag overrides.
     let err = config::resolve_root(&ConfigArgs {
         cli_root: Some(a.display().to_string()),
     })
     .unwrap_err();
-    assert!(!err.is_empty(), "a --root flag must not paper over an env divergence: {err}");
+    assert!(
+        !err.is_empty(),
+        "a --root flag must not paper over an env divergence: {err}"
+    );
 
     clear_root_env();
 }
@@ -123,15 +131,25 @@ fn config_file_tier_answers_and_expands_tilde() {
     clear_root_env();
 
     let target = dir.join("memory-root");
-    let toml = format!("# exomemory\nother_key = \"noise\"\nroot = \"{}\"\n", target.display());
+    let toml = format!(
+        "# exomemory\nother_key = \"noise\"\nroot = \"{}\"\n",
+        target.display()
+    );
     std::fs::write(&cfg_path, toml).unwrap();
     let cfg = config::resolve_root(&ConfigArgs { cli_root: None }).unwrap();
-    assert_eq!(cfg, target, "the config-file tier must answer when no flag/env is set");
+    assert_eq!(
+        cfg, target,
+        "the config-file tier must answer when no flag/env is set"
+    );
 
     // A `~` in the file value expands against $HOME at resolution time.
     std::fs::write(&cfg_path, "root = \"~/tilde-root\"\n").unwrap();
     let cfg = config::resolve_root(&ConfigArgs { cli_root: None }).unwrap();
-    assert_eq!(cfg, home.join("tilde-root"), "a ~ in config root must expand");
+    assert_eq!(
+        cfg,
+        home.join("tilde-root"),
+        "a ~ in config root must expand"
+    );
 
     match old_home {
         Some(v) => std::env::set_var("HOME", v),
@@ -152,7 +170,10 @@ fn exo_tz_override_honored_mismatch_refused_unknown_zone_loud() {
     let st = dir.join(".state/init.json");
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&st).unwrap()).unwrap();
-    assert_eq!(v["tz"], "UTC", "EXO_TZ must override the system zone in the fingerprint");
+    assert_eq!(
+        v["tz"], "UTC",
+        "EXO_TZ must override the system zone in the fingerprint"
+    );
     assert_eq!(v["tz_offset_minutes"], 0, "UTC must record offset 0");
 
     // 2. A later start resolving a DIFFERENT zone for the same root
@@ -165,7 +186,10 @@ fn exo_tz_override_honored_mismatch_refused_unknown_zone_loud() {
     );
     let v2: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&st).unwrap()).unwrap();
-    assert_eq!(v2["tz"], "UTC", "a refused re-init must not rewrite the fingerprint");
+    assert_eq!(
+        v2["tz"], "UTC",
+        "a refused re-init must not rewrite the fingerprint"
+    );
 
     // 3. The same zone/offset again is idempotent (no false refusal).
     std::env::set_var("EXO_TZ", "UTC");

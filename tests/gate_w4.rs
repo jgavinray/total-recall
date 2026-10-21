@@ -31,14 +31,17 @@
 //!   from the CURRENT process's gate counter (>0), refused_count = the current
 //!   process's gate-refusal counter for the session.
 
+use serde_json::json;
+use std::path::{Path, PathBuf};
 use total_recall::config;
 use total_recall::rpc::{HandlerResult, Server};
 use total_recall::tools::{compliance, recall, ticks};
-use serde_json::json;
-use std::path::PathBuf;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("total-recall-gate-w4-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!(
+        "total-recall-gate-w4-{name}-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -61,20 +64,28 @@ Worker signoff (beta) | done: no | unpushed: none | awaits human: none | still r
 - 2026-09-12 — superseded block prose three
 "#;
 
-fn seeded(root: &PathBuf) -> Server {
+fn seeded(root: &Path) -> Server {
     config::init_state(root).unwrap();
     std::fs::write(root.join("signoff.md"), SEED).unwrap();
     std::fs::write(root.join("2026-09-13.md"), "# Day\n\nDecision: bring the Rust port up first (reference parity)\nParser edge BLOCKED: version mismatch in the fixture loader\n").unwrap();
     std::fs::create_dir_all(root.join("briefs")).unwrap();
-    std::fs::write(root.join("briefs/parser.md"), "# Brief parser\n\nParser edge BLOCKED: version mismatch in the fixture loader\n").unwrap();
+    std::fs::write(
+        root.join("briefs/parser.md"),
+        "# Brief parser\n\nParser edge BLOCKED: version mismatch in the fixture loader\n",
+    )
+    .unwrap();
     std::fs::create_dir_all(root.join("wiki")).unwrap();
-    std::fs::write(root.join("wiki/parser-notes.md"), "# Parser notes\n\nParser edge BLOCKED: version mismatch in the fixture loader\n").unwrap();
+    std::fs::write(
+        root.join("wiki/parser-notes.md"),
+        "# Parser notes\n\nParser edge BLOCKED: version mismatch in the fixture loader\n",
+    )
+    .unwrap();
     let mut s = Server::new_server(root);
     let _ = total_recall::tools::signoff_read::read_signoff(&mut s, "probe");
     s
 }
 
-fn audit_seed(root: &PathBuf, lines: &[String]) {
+fn audit_seed(root: &Path, lines: &[String]) {
     let dir = root.join(".audit");
     std::fs::create_dir_all(&dir).unwrap();
     let f = dir.join("2026-09-13.jsonl");
@@ -96,7 +107,11 @@ fn recall_works_ungated_before_handshake() {
     let root = dir.clone();
     config::init_state(&root).unwrap();
     std::fs::write(root.join("signoff.md"), SEED).unwrap();
-    std::fs::write(root.join("2026-09-13.md"), "# Day\n\nDecision: bring the Rust port up first (reference parity)\n").unwrap();
+    std::fs::write(
+        root.join("2026-09-13.md"),
+        "# Day\n\nDecision: bring the Rust port up first (reference parity)\n",
+    )
+    .unwrap();
     let mut s = Server::new_server(&root);
     // NO handshake — recall runs ungated per §4.
     let v = match recall::recall(&mut s, "s-fresh", &json!({"query": "Decision"})) {
@@ -106,8 +121,14 @@ fn recall_works_ungated_before_handshake() {
     assert_eq!(v["count"], 1, "one match over all buckets");
     let first = &v["results"][0];
     assert_eq!(first["path"], "2026-09-13.md");
-    assert!(first["ts"].as_str().unwrap().ends_with('Z'), "every result carries a UTC ts");
-    assert_eq!(first["excerpt"], "Decision: bring the Rust port up first (reference parity)");
+    assert!(
+        first["ts"].as_str().unwrap().ends_with('Z'),
+        "every result carries a UTC ts"
+    );
+    assert_eq!(
+        first["excerpt"],
+        "Decision: bring the Rust port up first (reference parity)"
+    );
 }
 
 #[test]
@@ -118,15 +139,29 @@ fn recall_substring_searches_all_buckets_dated_and_confined() {
         HandlerResult::Ok(v) => v,
         HandlerResult::Err(e) => panic!("recall must succeed: {e}"),
     };
-    let paths: Vec<String> = v["results"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap().to_string()).collect();
+    let paths: Vec<String> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().to_string())
+        .collect();
     assert_eq!(paths.len(), 2, "dayfile + briefs both match");
     assert!(paths.contains(&"2026-09-13.md".to_string()));
     assert!(paths.contains(&"briefs/parser.md".to_string()));
-    assert!(!paths.iter().any(|p| p.starts_with("wiki/")), "wiki/ never searched");
+    assert!(
+        !paths.iter().any(|p| p.starts_with("wiki/")),
+        "wiki/ never searched"
+    );
     assert_eq!(v["count"], 2);
     for r in v["results"].as_array().unwrap() {
-        assert!(r["ts"].as_str().unwrap().ends_with('Z'), "dated excerpt required");
-        assert!(r["excerpt"].as_str().unwrap().contains("Parser edge"), "excerpt is the matched line");
+        assert!(
+            r["ts"].as_str().unwrap().ends_with('Z'),
+            "dated excerpt required"
+        );
+        assert!(
+            r["excerpt"].as_str().unwrap().contains("Parser edge"),
+            "excerpt is the matched line"
+        );
     }
 }
 
@@ -134,12 +169,25 @@ fn recall_substring_searches_all_buckets_dated_and_confined() {
 fn recall_scope_confines_to_named_bucket() {
     let dir = tmp_root("recall-scope");
     let mut s = seeded(&dir);
-    let v = match recall::recall(&mut s, "probe", &json!({"query": "Worker signoff (beta)", "scope": "signoff"})) {
+    let v = match recall::recall(
+        &mut s,
+        "probe",
+        &json!({"query": "Worker signoff (beta)", "scope": "signoff"}),
+    ) {
         HandlerResult::Ok(v) => v,
         HandlerResult::Err(e) => panic!("recall must succeed: {e}"),
     };
-    let paths: Vec<String> = v["results"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap().to_string()).collect();
-    assert_eq!(paths, vec!["signoff.md"], "scope confines results to the named bucket");
+    let paths: Vec<String> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["signoff.md"],
+        "scope confines results to the named bucket"
+    );
     assert_eq!(v["count"], 1);
 }
 
@@ -147,7 +195,11 @@ fn recall_scope_confines_to_named_bucket() {
 fn recall_regex_mode_matches_alternation() {
     let dir = tmp_root("recall-regex");
     let mut s = seeded(&dir);
-    let v = match recall::recall(&mut s, "probe", &json!({"query": "re:Parser edge (BLOCK|BLOCKED)"})) {
+    let v = match recall::recall(
+        &mut s,
+        "probe",
+        &json!({"query": "re:Parser edge (BLOCK|BLOCKED)"}),
+    ) {
         HandlerResult::Ok(v) => v,
         HandlerResult::Err(e) => panic!("regex mode must succeed: {e}"),
     };
@@ -158,26 +210,58 @@ fn recall_regex_mode_matches_alternation() {
 fn recall_workflow_filter_drops_untagged_entries() {
     let dir = tmp_root("recall-wf");
     let mut s = seeded(&dir);
-    let v = match recall::recall(&mut s, "probe", &json!({"query": "done:", "workflow": "memory-kernel"})) {
+    let v = match recall::recall(
+        &mut s,
+        "probe",
+        &json!({"query": "done:", "workflow": "memory-kernel"}),
+    ) {
         HandlerResult::Ok(v) => v,
         HandlerResult::Err(e) => panic!("workflow filter must succeed: {e}"),
     };
-    let paths: Vec<String> = v["results"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap().to_string()).collect();
-    assert_eq!(paths, vec!["signoff.md"], "only the tagged signoff entry survives the filter");
+    let paths: Vec<String> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["signoff.md"],
+        "only the tagged signoff entry survives the filter"
+    );
     assert_eq!(v["count"], 1);
-    assert!(v["results"][0]["excerpt"].as_str().unwrap().contains("| workflow: memory-kernel"), "the surviving line carries the tag");
+    assert!(
+        v["results"][0]["excerpt"]
+            .as_str()
+            .unwrap()
+            .contains("| workflow: memory-kernel"),
+        "the surviving line carries the tag"
+    );
 }
 
 #[test]
 fn recall_since_filters_by_date() {
     let dir = tmp_root("recall-since");
     let mut s = seeded(&dir);
-    let v = match recall::recall(&mut s, "probe", &json!({"query": "Decision", "since": "2026-09-13"})) {
+    let v = match recall::recall(
+        &mut s,
+        "probe",
+        &json!({"query": "Decision", "since": "2026-09-13"}),
+    ) {
         HandlerResult::Ok(v) => v,
         HandlerResult::Err(e) => panic!("since filter must succeed: {e}"),
     };
-    let paths: Vec<String> = v["results"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap().to_string()).collect();
-    assert_eq!(paths, vec!["2026-09-13.md"], "since lower-bounds the ts date");
+    let paths: Vec<String> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["2026-09-13.md"],
+        "since lower-bounds the ts date"
+    );
 }
 
 #[test]
@@ -185,16 +269,34 @@ fn log_tick_gated_before_handshake_counts_and_writes_nothing() {
     let dir = tmp_root("tick-gated");
     let mut s = Server::new_server(&dir);
     config::init_state(&dir).unwrap();
-    let before = std::fs::read_dir(dir.join(".audit")).map(|d| d.count()).unwrap_or(0);
-    let r = ticks::log_tick(&mut s, "probe", &json!({"check": "model-server-health", "result": "ok"}));
+    let before = std::fs::read_dir(dir.join(".audit"))
+        .map(|d| d.count())
+        .unwrap_or(0);
+    let r = ticks::log_tick(
+        &mut s,
+        "probe",
+        &json!({"check": "model-server-health", "result": "ok"}),
+    );
     match r {
         HandlerResult::Err(msg) => {
-            assert!(msg.contains("handshake incomplete"), "gated refusal text: {msg}");
-            assert_eq!(s.attempted_write_before_handshake.get("probe").cloned().unwrap_or(0), 1, "attempt counted once");
+            assert!(
+                msg.contains("handshake incomplete"),
+                "gated refusal text: {msg}"
+            );
+            assert_eq!(
+                s.attempted_write_before_handshake
+                    .get("probe")
+                    .cloned()
+                    .unwrap_or(0),
+                1,
+                "attempt counted once"
+            );
         }
         HandlerResult::Ok(_) => panic!("must refuse before the handshake"),
     }
-    let after = std::fs::read_dir(dir.join(".audit")).map(|d| d.count()).unwrap_or(0);
+    let after = std::fs::read_dir(dir.join(".audit"))
+        .map(|d| d.count())
+        .unwrap_or(0);
     assert_eq!(after, before, "no audit file written");
 }
 
@@ -209,7 +311,11 @@ fn log_tick_after_handshake_appends_audit_jsonl() {
     // handshake") needs the bucket on disk. No assertion touched.
     std::fs::write(dir.join("signoff.md"), SEED).unwrap();
     let _ = total_recall::tools::signoff_read::read_signoff(&mut s, "probe");
-    match ticks::log_tick(&mut s, "probe", &json!({"check": "model-server-health", "result": "ok"})) {
+    match ticks::log_tick(
+        &mut s,
+        "probe",
+        &json!({"check": "model-server-health", "result": "ok"}),
+    ) {
         HandlerResult::Err(e) => panic!("post-handshake tick must succeed: {e}"),
         HandlerResult::Ok(_) => {}
     }
@@ -234,7 +340,10 @@ fn last_tick_latest_tick_and_silent_check_loud_error() {
     let mut s = Server::new_server(&dir);
     config::init_state(&dir).unwrap();
     // seed two ticks: one exactly at the 45-minute boundary, one 44 minutes ago.
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     let boundary = now - 45 * 60;
     let fresh = now - 44 * 60;
     let iso = |t: i64| {
@@ -249,13 +358,22 @@ fn last_tick_latest_tick_and_silent_check_loud_error() {
         let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
         let mp = (5 * doy + 2) / 153; // [0, 11]
         let day = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-        let (year, m) = if mp < 10 { (y, mp + 3) } else { (y + 1, mp - 9) };
+        let (year, m) = if mp < 10 {
+            (y, mp + 3)
+        } else {
+            (y + 1, mp - 9)
+        };
         let rem = t % 86_400;
         let (hh, mm, ss) = (rem / 3_600, rem / 60 % 60, rem % 60);
         format!("{year:04}-{:02}-{:02}T{hh:02}:{mm:02}:{ss:02}Z", m, day)
     };
-    audit_seed(&dir, &[tick_line(&iso(boundary), "s-old", "model-server-health", "ok"),
-                       tick_line(&iso(fresh), "s-fresh", "model-server-health", "ok")]);
+    audit_seed(
+        &dir,
+        &[
+            tick_line(&iso(boundary), "s-old", "model-server-health", "ok"),
+            tick_line(&iso(fresh), "s-fresh", "model-server-health", "ok"),
+        ],
+    );
     let v = match ticks::last_tick(&mut s, "probe", &json!({"check": "model-server-health"})) {
         HandlerResult::Ok(v) => v,
         HandlerResult::Err(e) => panic!("fresh tick must pass the window: {e}"),
@@ -263,11 +381,17 @@ fn last_tick_latest_tick_and_silent_check_loud_error() {
     assert_eq!(v["check"], "model-server-health");
     assert_eq!(v["ts"], iso(fresh), "latest tick wins");
     // a tick at EXACTLY the 45-minute boundary is aged TO the window -> loud error.
-    audit_seed(&dir, &[tick_line(&iso(now - 45 * 60), "s-x", "parser-fix", "ok")]);
+    audit_seed(
+        &dir,
+        &[tick_line(&iso(now - 45 * 60), "s-x", "parser-fix", "ok")],
+    );
     let r = ticks::last_tick(&mut s, "probe", &json!({"check": "parser-fix"}));
     match r {
         HandlerResult::Err(msg) => {
-            assert!(msg.starts_with("silence is never good news: check parser-fix last ticked "), "loud error text: {msg}");
+            assert!(
+                msg.starts_with("silence is never good news: check parser-fix last ticked "),
+                "loud error text: {msg}"
+            );
         }
         HandlerResult::Ok(_) => panic!("aged-to-window check must error loudly"),
     }
@@ -280,7 +404,10 @@ fn last_tick_unregistered_check_errors_too() {
     config::init_state(&dir).unwrap();
     let r = ticks::last_tick(&mut s, "probe", &json!({"check": "never-ticked-check"}));
     match r {
-        HandlerResult::Err(msg) => assert!(msg.contains("never-ticked-check"), "unregistered check error names the check: {msg}"),
+        HandlerResult::Err(msg) => assert!(
+            msg.contains("never-ticked-check"),
+            "unregistered check error names the check: {msg}"
+        ),
         HandlerResult::Ok(_) => panic!("unregistered check must error"),
     }
 }
@@ -297,11 +424,26 @@ fn compliance_report_is_audit_derived_and_measured() {
     // one REAL refused attempt before the handshake — the gate counter is
     // observable at the gate, and the audit log never records refusals
     // (they land nothing).
-    let _ = total_recall::tools::signoff_append::append_signoff(&mut s, "probe", &json!({"role":"r","workflow":"wf","done":"yes"}));
-    assert_eq!(s.attempted_write_before_handshake.get("probe").cloned().unwrap_or(0), 1, "counter observable");
+    let _ = total_recall::tools::signoff_append::append_signoff(
+        &mut s,
+        "probe",
+        &json!({"role":"r","workflow":"wf","done":"yes"}),
+    );
+    assert_eq!(
+        s.attempted_write_before_handshake
+            .get("probe")
+            .cloned()
+            .unwrap_or(0),
+        1,
+        "counter observable"
+    );
     let _ = total_recall::tools::signoff_read::read_signoff(&mut s, "probe");
     // two mutating writes AFTER the handshake — each lands an audit entry.
-    match total_recall::tools::signoff_append::append_signoff(&mut s, "probe", &json!({"role":"r","workflow":"wf","done":"yes"})) {
+    match total_recall::tools::signoff_append::append_signoff(
+        &mut s,
+        "probe",
+        &json!({"role":"r","workflow":"wf","done":"yes"}),
+    ) {
         HandlerResult::Err(e) => panic!("post-handshake append must succeed: {e}"),
         HandlerResult::Ok(_) => {}
     }
@@ -317,7 +459,16 @@ fn compliance_report_is_audit_derived_and_measured() {
     assert_eq!(report["session_id"], s.session_id);
     assert!(report["handshaked_at"].as_str().unwrap().ends_with('Z'));
     assert!(report["first_write_ts"].as_str().unwrap().ends_with('Z'));
-    assert_eq!(report["attempted_write_before_handshake"], true, "counter observable");
-    assert_eq!(report["write_count"], 2, "audit entries counted (append + tick)");
-    assert_eq!(report["refused_count"], 1, "the gate counter observable at the gate");
+    assert_eq!(
+        report["attempted_write_before_handshake"], true,
+        "counter observable"
+    );
+    assert_eq!(
+        report["write_count"], 2,
+        "audit entries counted (append + tick)"
+    );
+    assert_eq!(
+        report["refused_count"], 1,
+        "the gate counter observable at the gate"
+    );
 }
