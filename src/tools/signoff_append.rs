@@ -261,6 +261,24 @@ fn separator_then_reserved_name(value: &str) -> Option<&'static str> {
     None
 }
 
+/// True when writing `value` into its fragment would add a split the reader
+/// makes. The reader splits the line at the literal ` | ` (space, pipe,
+/// space) and each fragment at its first `: `; a value is therefore safe
+/// exactly when framing the fragment it is written into between two such
+/// separators and splitting at ` | ` yields that one fragment back
+/// unchanged. This refuses a value containing ` | `, one that starts with
+/// `|`, one that ends with ` |` — and with them every whitespace spelling
+/// of the `| <reserved name> :` forgery, since each of those adds a split.
+fn adds_a_split(prefix: &str, suffix: &str, value: &str) -> bool {
+    let fragment = format!("{prefix}{value}{suffix}");
+    let framed = format!(" | {fragment} | ");
+    let mut parts = framed.split(" | ");
+    !(parts.next() == Some("")
+        && parts.next() == Some(fragment.as_str())
+        && parts.next() == Some("")
+        && parts.next().is_none())
+}
+
 /// Schema validation (spec §3 `append_signoff` schema) plus the
 /// format invariants the schema cannot express: the entry is exactly ONE
 /// line, and `role` must keep the fixed token `Worker signoff (<role>)`
@@ -340,6 +358,32 @@ fn parse_args(
         if let Some(name) = separator_then_reserved_name(value) {
             return Err(format!(
                 "append_signoff refused: '{field}' contains '|' followed by the reserved field name '{name}' — readers parse the entry field-by-field and would read a forged field"
+            ));
+        }
+    }
+
+    // A value may also break the reader's split without naming a reserved
+    // field: `unpushed: "left | right"` adds a fragment with no `: ` and the
+    // reader skips the whole line; `x |  done : yes` forges `done` through
+    // the whitespace the reader trims. The split rule above is the sound
+    // test for both: the value must survive being framed between the
+    // surrounding ` | ` separators as exactly one fragment.
+    for (field, prefix, suffix, value) in [
+        ("role", "Worker signoff (", ")", role.as_str()),
+        ("workflow", "workflow: ", "", workflow.as_str()),
+        ("unpushed", "unpushed: ", "", unpushed.as_str()),
+        ("awaits_human", "awaits human: ", "", awaits_human.as_str()),
+        ("still_running", "still running: ", "", still_running.as_str()),
+        (
+            "kaibo_review",
+            "kaibo review: ",
+            "",
+            kaibo_review.as_deref().unwrap_or(""),
+        ),
+    ] {
+        if adds_a_split(prefix, suffix, value) {
+            return Err(format!(
+                "append_signoff refused: '{field}' would add a field split to the one-line entry — readers split the entry at ' | ' and would misread or skip the line"
             ));
         }
     }
