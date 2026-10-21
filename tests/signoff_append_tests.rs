@@ -583,19 +583,90 @@ fn forged_reserved_field_name_after_separator_refused_zero_bytes() {
     }
 }
 
-/// Ordinary pipes stay legal: a separator followed by ordinary data, a
-/// reserved name with no separator before it, a reserved name without its
-/// colon after a separator, and a lone trailing separator all append
+/// A free-text value that adds a split the reader makes is refused with
+/// ZERO bytes written, in EVERY free-text field — even when it forges no
+/// reserved name: ` | ` inside the value splits the fragment (and a
+/// fragment without `: ` makes the reader skip the whole line), a leading
+/// `|` or a trailing ` |` does the same, and a space or tab before the
+/// colon forges a reserved field through the whitespace the reader trims.
+#[test]
+fn values_that_add_a_reader_split_refused_zero_bytes() {
+    const FIELDS: [&str; 6] = [
+        "role",
+        "workflow",
+        "unpushed",
+        "awaits_human",
+        "still_running",
+        "kaibo_review",
+    ];
+    let mut cases: Vec<(&str, &str)> = Vec::new();
+    // Shapes that break the split in every free-text field. `role` is
+    // exempt from the three below: it fills `Worker signoff (<role>)`, which
+    // the reader takes up to the closing `)` without splitting it, so a
+    // leading or trailing pipe there round-trips.
+    for field in ["workflow", "unpushed", "awaits_human", "still_running", "kaibo_review"] {
+        for value in ["| x", "x |", "ends with a lone |"] {
+            cases.push((field, value));
+        }
+    }
+    for field in FIELDS {
+        for value in [
+            // The four values the old "still append" test wrongly accepted,
+            // plus an unknown-key fragment and the whitespace spellings of
+            // the reserved-name forgery.
+            "left | right",
+            "see | unpushed in the log",
+            "left | see done: yes",
+            "x | y: z",
+            "x | done : yes",
+            "x | done  : yes",
+            "x | \tdone: yes",
+        ] {
+            cases.push((field, value));
+        }
+    }
+    for (i, (field, value)) in cases.iter().enumerate() {
+        let dir = seeded_root(&format!("split-{i}"));
+        let before = std::fs::read(dir.join("signoff.md")).unwrap();
+        let mut s = handshaken_server(&dir, "probe");
+        let mut args = full_args();
+        args.as_object_mut()
+            .unwrap()
+            .insert(field.to_string(), json!(value));
+        match signoff_append::append_signoff(&mut s, "probe", &args) {
+            HandlerResult::Err(msg) => {
+                assert!(
+                    msg.contains(&format!("'{field}'")),
+                    "[{i}] the refusal names the field ({field:?}): {msg}"
+                );
+            }
+            HandlerResult::Ok(_) => {
+                panic!("[{i}] {field}={value:?} adds a reader split and must be refused")
+            }
+        }
+        assert_eq!(
+            std::fs::read(dir.join("signoff.md")).unwrap(),
+            before,
+            "[{i}] zero bytes written"
+        );
+        assert!(
+            !dir.join(".locks").exists(),
+            "[{i}] no lock file for a validation refusal"
+        );
+    }
+}
+
+/// Ordinary pipes stay legal when they do not add a split the reader makes:
+/// a pipe with no spaces around it, a reserved name with no separator before
+/// it, a colon-space inside ordinary data, and a path with `:42` all append
 /// verbatim.
 #[test]
 fn ordinary_pipes_and_unseparated_names_still_append() {
-    let cases: [(&str, &str); 7] = [
-        ("unpushed", "left | right"),
+    let cases: [(&str, &str); 5] = [
         ("unpushed", "a|b"),
         ("unpushed", "see done: yes in the log"),
-        ("unpushed", "see | unpushed in the log"),
-        ("unpushed", "ends with a lone |"),
-        ("awaits_human", "left | see done: yes"),
+        ("awaits_human", "ratio 3:1 done : soon"),
+        ("still_running", "path/to/file.rs:42"),
         ("kaibo_review", "job-12 (cast) @ 2026-10-20T00:00:00Z"),
     ];
     for (i, (field, value)) in cases.iter().enumerate() {
