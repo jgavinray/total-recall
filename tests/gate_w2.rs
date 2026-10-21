@@ -246,7 +246,7 @@ fn two_server_processes_on_one_root_serialize() {
     let dir = tmp_root("twoproc");
     config::init_state(&dir).unwrap();
     seed(&dir);
-    let bin = std::env::var("CARGO_BIN_EXE_total-recall").expect("cargo test builds the bin target");
+    let bin = env!("CARGO_BIN_EXE_total-recall");
     let frames_a = format!(
         "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2026-07-28\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"a\",\"version\":\"0\"}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"read_signoff\",\"arguments\":{{}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"append_signoff\",\"arguments\":{{\"role\":\"procA\",\"workflow\":\"wf-a\",\"done\":\"yes\",\"unpushed\":\"none\",\"awaits_human\":\"none\",\"still_running\":\"no\"}}}}}}\n"
     );
