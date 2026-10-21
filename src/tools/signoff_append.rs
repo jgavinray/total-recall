@@ -70,6 +70,22 @@ const MAX_ACQUIRE_ATTEMPTS: u32 = 50;
 /// second, so "remove your own lock file" can never remove a successor's.
 static ACQUIRE_NONCE: AtomicU64 = AtomicU64::new(0);
 
+/// The reserved field names of the serialized entry, in guard order plus
+/// the optional and server-stamped fields. The guard and launcher parse
+/// the line by these names, so a free-text value carrying the separator
+/// `|` followed by one of them would forge another field of the entry
+/// (a second `done:`, `still running:`, …) — refused in [`parse_args`].
+const RESERVED_FIELD_NAMES: [&str; 8] = [
+    "done:",
+    "unpushed:",
+    "awaits human:",
+    "still running:",
+    "workflow:",
+    "ts:",
+    "session:",
+    "kaibo review:",
+];
+
 /// The registry entry (spec §3, verbatim — description carries the
 /// MANDATORY contract text; the input schema is the pinned shape).
 fn append_signoff_tool() -> Tool {
@@ -232,10 +248,28 @@ fn serialize_line(
     line
 }
 
+/// The reserved field name a free-text value would forge, if any: the
+/// first `|` that is followed — with or without a space — by one of
+/// [`RESERVED_FIELD_NAMES`]. Ordinary pipes (`left | right`, `a|b`) and a
+/// name mentioned without a leading separator (`see done: yes in the
+/// log`) are legal: only a separator directly before the name turns the
+/// value into another field of the entry.
+fn forged_field_name(value: &str) -> Option<&'static str> {
+    for (idx, _) in value.match_indices('|') {
+        let after = value[idx + 1..].trim_start_matches(' ');
+        if let Some(name) = RESERVED_FIELD_NAMES.iter().find(|name| after.starts_with(*name)) {
+            return Some(name);
+        }
+    }
+    None
+}
+
 /// Schema validation (spec §3 `append_signoff` schema) plus the
 /// format invariants the schema cannot express: the entry is exactly ONE
-/// line, and `role` must keep the fixed token `Worker signoff (<role>)`
-/// well-formed (no parentheses, no line breaks, not empty).
+/// line, `role` must keep the fixed token `Worker signoff (<role>)`
+/// well-formed (no parentheses, no line breaks, not empty), and no
+/// free-text value may forge another field of the entry (a separator
+/// `|` followed by a reserved field name).
 fn parse_args(
     args: &Value,
 ) -> Result<(String, String, String, String, String, String, Option<String>), String> {
@@ -292,6 +326,27 @@ fn parse_args(
     ] {
         if value.contains('\n') || value.contains('\r') {
             return Err(format!("append_signoff refused: '{field}' contains a newline — the entry is exactly ONE line"));
+        }
+    }
+
+    // A free-text value may not carry the field separator `|` followed by
+    // a reserved field name: the guard and launcher parse the line by
+    // name, so `x | done: yes | still running: no` would append a second
+    // `done:`/`still running:` field — a forged claim in the line a
+    // reader trusts. `done` is enum-checked above, so only the six
+    // free-text fields can carry text.
+    for (field, value) in [
+        ("role", role.as_str()),
+        ("workflow", workflow.as_str()),
+        ("unpushed", unpushed.as_str()),
+        ("awaits_human", awaits_human.as_str()),
+        ("still_running", still_running.as_str()),
+        ("kaibo_review", kaibo_review.as_deref().unwrap_or("")),
+    ] {
+        if let Some(name) = forged_field_name(value) {
+            return Err(format!(
+                "append_signoff refused: '{field}' contains the field separator '|' followed by reserved field name '{name}' — a value may not forge another field of the one-line entry"
+            ));
         }
     }
 
