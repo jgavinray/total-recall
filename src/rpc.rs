@@ -135,14 +135,26 @@ impl Server {
                 crate::tools::signoff_append::tools(),
                 crate::tools::signoff_append::handlers(),
             ),
-            (crate::tools::claims::tools(), crate::tools::claims::handlers()),
-            (crate::tools::briefs::tools(), crate::tools::briefs::handlers()),
+            (
+                crate::tools::claims::tools(),
+                crate::tools::claims::handlers(),
+            ),
+            (
+                crate::tools::briefs::tools(),
+                crate::tools::briefs::handlers(),
+            ),
             (
                 crate::tools::warmstart::tools(),
                 crate::tools::warmstart::handlers(),
             ),
-            (crate::tools::recall::tools(), crate::tools::recall::handlers()),
-            (crate::tools::ticks::tools(), crate::tools::ticks::handlers()),
+            (
+                crate::tools::recall::tools(),
+                crate::tools::recall::handlers(),
+            ),
+            (
+                crate::tools::ticks::tools(),
+                crate::tools::ticks::handlers(),
+            ),
             (
                 crate::tools::compliance::tools(),
                 crate::tools::compliance::handlers(),
@@ -195,15 +207,14 @@ fn generate_session_id() -> String {
 pub fn handle_frame(server: &mut Server, frame: &str) -> Result<String, String> {
     // Malformed: not valid JSON at all -> -32700 parse error, id null
     // (the id is unrecoverable), per the pinned contract frame.
-    let request: Value = match serde_json::from_str(frame) {
-        Ok(value) => value,
-        Err(_) => {
-            return Err(
+    let request: Value =
+        match serde_json::from_str(frame) {
+            Ok(value) => value,
+            Err(_) => return Err(
                 json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error"}})
                     .to_string(),
-            )
-        }
-    };
+            ),
+        };
 
     // Structurally invalid: valid JSON that is not a JSON-RPC request
     // (not an object, or no usable `method` member) -> -32600 invalid
@@ -212,7 +223,10 @@ pub fn handle_frame(server: &mut Server, frame: &str) -> Result<String, String> 
     let members = match request.as_object() {
         Some(members) => members,
         None => {
-            return Err(invalid_request_frame(null_id(), "invalid request: not a JSON object"))
+            return Err(invalid_request_frame(
+                null_id(),
+                "invalid request: not a JSON object",
+            ))
         }
     };
     let method = match members.get("method").and_then(|value| value.as_str()) {
@@ -247,14 +261,15 @@ pub fn handle_frame(server: &mut Server, frame: &str) -> Result<String, String> 
                 // No usable tool name (or a name the registry does not
                 // hold) -> -32602 Invalid params. Never -32601: that code
                 // names an unknown METHOD, not an unknown tool (spec §2).
-                Some(name) => match server.handlers.get(name) {
-                    None => Err((-32602, "unknown tool", format!("unknown tool name: {name}"))),
-                    Some(handler) => {
-                        let arguments = members
-                            .get("params")
-                            .and_then(|params| params.get("arguments").cloned())
-                            .unwrap_or_else(|| json!({}));
-                        match handler(server, &arguments) {
+                Some(name) => {
+                    match server.handlers.get(name) {
+                        None => Err((-32602, "unknown tool", format!("unknown tool name: {name}"))),
+                        Some(handler) => {
+                            let arguments = members
+                                .get("params")
+                                .and_then(|params| params.get("arguments").cloned())
+                                .unwrap_or_else(|| json!({}));
+                            match handler(server, &arguments) {
                             // Success: MCP mandates a `content` array on
                             // every tools/call result — the handler's raw
                             // JSON value travels as ONE text item holding
@@ -282,13 +297,22 @@ pub fn handle_frame(server: &mut Server, frame: &str) -> Result<String, String> 
                                 "content": [{"type": "text", "text": message}],
                             })),
                         }
+                        }
                     }
-                },
-                None => Err((-32602, "unknown tool", "unknown tool name: params.name missing".to_string())),
+                }
+                None => Err((
+                    -32602,
+                    "unknown tool",
+                    "unknown tool name: params.name missing".to_string(),
+                )),
             }
         }
         // Every other named method this server does not implement.
-        _ => Err((-32601, "method not found", format!("unknown method: {method}"))),
+        _ => Err((
+            -32601,
+            "method not found",
+            format!("unknown method: {method}"),
+        )),
     };
 
     match outcome {

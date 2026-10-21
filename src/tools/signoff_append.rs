@@ -28,10 +28,10 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::os::unix::fs::MetadataExt;
 
 use serde_json::{json, Map, Value};
 
@@ -205,6 +205,7 @@ pub fn append_signoff(server: &mut Server, session: &str, args: &Value) -> Handl
 /// verbatim, then the server stamps — `workflow` first (after the
 /// optional field), then `ts` (ISO-8601Z), then the process-local
 /// `session`.
+#[allow(clippy::too_many_arguments)]
 fn serialize_line(
     role: &str,
     done: &str,
@@ -261,13 +262,24 @@ fn separator_then_reserved_name(value: &str) -> Option<&'static str> {
     None
 }
 
+/// The validated fields of one entry, in the order `parse_args` returns
+/// them: `role`, `workflow`, `done`, `unpushed`, `awaits_human`,
+/// `still_running`, then the optional `kaibo review` text.
+type ParsedEntry = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+);
+
 /// Schema validation (spec §3 `append_signoff` schema) plus the
 /// format invariants the schema cannot express: the entry is exactly ONE
 /// line, and `role` must keep the fixed token `Worker signoff (<role>)`
 /// well-formed (no parentheses, no line breaks, not empty).
-fn parse_args(
-    args: &Value,
-) -> Result<(String, String, String, String, String, String, Option<String>), String> {
+fn parse_args(args: &Value) -> Result<ParsedEntry, String> {
     let obj = args
         .as_object()
         .ok_or_else(|| "append_signoff refused: arguments must be a JSON object".to_string())?;
@@ -282,7 +294,10 @@ fn parse_args(
         "still_running",
         "kaibo_review",
     ];
-    let unknown: Vec<&String> = obj.keys().filter(|k| !allowed.contains(&k.as_str())).collect();
+    let unknown: Vec<&String> = obj
+        .keys()
+        .filter(|k| !allowed.contains(&k.as_str()))
+        .collect();
     if !unknown.is_empty() {
         return Err(format!(
             "append_signoff refused: unknown field(s) {:?} — the schema allows only: {}",
@@ -295,10 +310,8 @@ fn parse_args(
     let workflow = require_string(obj, "workflow")?;
     let done = require_string(obj, "done")?;
     let unpushed = optional_string(obj, "unpushed")?.unwrap_or_else(|| "none".to_string());
-    let awaits_human = optional_string(obj, "awaits_human")?
-        .unwrap_or_else(|| "none".to_string());
-    let still_running = optional_string(obj, "still_running")?
-        .unwrap_or_else(|| "no".to_string());
+    let awaits_human = optional_string(obj, "awaits_human")?.unwrap_or_else(|| "none".to_string());
+    let still_running = optional_string(obj, "still_running")?.unwrap_or_else(|| "no".to_string());
     let kaibo_review = optional_string(obj, "kaibo_review")?;
 
     if role.trim().is_empty() {
@@ -308,7 +321,9 @@ fn parse_args(
         return Err("append_signoff refused: 'role' may not contain '(' or ')' — the fixed token is `Worker signoff (<role>)`".to_string());
     }
     if done != "yes" && done != "no" {
-        return Err(format!("append_signoff refused: 'done' must be \"yes\" or \"no\" (schema enum; got {done:?})"));
+        return Err(format!(
+            "append_signoff refused: 'done' must be \"yes\" or \"no\" (schema enum; got {done:?})"
+        ));
     }
     for (field, value) in [
         ("role", role.as_str()),
@@ -345,7 +360,13 @@ fn parse_args(
     }
 
     Ok((
-        role, workflow, done, unpushed, awaits_human, still_running, kaibo_review,
+        role,
+        workflow,
+        done,
+        unpushed,
+        awaits_human,
+        still_running,
+        kaibo_review,
     ))
 }
 
@@ -365,7 +386,9 @@ fn value_kind(v: &Value) -> &'static str {
 /// A required schema field: present AND a string.
 fn require_string(obj: &Map<String, Value>, key: &str) -> Result<String, String> {
     match obj.get(key) {
-        None => Err(format!("append_signoff refused: missing required field '{key}'")),
+        None => Err(format!(
+            "append_signoff refused: missing required field '{key}'"
+        )),
         Some(Value::String(s)) => Ok(s.clone()),
         Some(other) => Err(format!(
             "append_signoff refused: field '{key}' must be a string (got {})",
@@ -418,17 +441,16 @@ fn lock_contents(token: &LockToken) -> String {
 fn acquire_lock(root: &Path, session: &str) -> Result<LockToken, String> {
     let locks_dir = root.join(".locks");
     if let Err(e) = std::fs::create_dir_all(&locks_dir) {
-        return Err(format!("append_signoff refused: cannot create .locks/: {e}"));
+        return Err(format!(
+            "append_signoff refused: cannot create .locks/: {e}"
+        ));
     }
     let path = locks_dir.join(LOCK_NAME);
     let pid = std::process::id();
     let mut attempts = 0u32;
     loop {
         attempts += 1;
-        let epoch = match now_epoch() {
-            Ok(epoch) => epoch,
-            Err(msg) => return Err(msg),
-        };
+        let epoch = now_epoch()?;
         let nonce = ACQUIRE_NONCE.fetch_add(1, Ordering::Relaxed);
         let token = LockToken {
             pid,
@@ -511,9 +533,7 @@ fn lock_age(path: &Path) -> Option<Duration> {
             if let Ok(holder_epoch) = raw.parse::<u64>() {
                 if let Ok(now_since) = now.duration_since(UNIX_EPOCH) {
                     if holder_epoch <= now_since.as_secs() {
-                        return Some(Duration::from_secs(
-                            now_since.as_secs() - holder_epoch,
-                        ));
+                        return Some(Duration::from_secs(now_since.as_secs() - holder_epoch));
                     }
                 }
             }
@@ -595,13 +615,11 @@ fn remove_stale_lock(path: &Path, stale: &StaleLock) -> bool {
         Ok(meta) => meta,
         Err(_) => return false,
     };
-    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime
-    {
+    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime {
         return false;
     }
     std::fs::remove_file(path).is_ok()
 }
-
 
 /// Parse a whitespace-delimited `key=value` field from lock contents.
 fn parse_lock_field(contents: &str, key: &str) -> Option<String> {
@@ -674,9 +692,8 @@ fn append_under_lock(root: &Path, line: &str) -> Result<(), String> {
     // other writers' and are preserved verbatim.
     if !path.exists() {
         let scaffold = "# Signoff\n\n## Worker sessions — sign off here as you go\n\n";
-        std::fs::write(&path, scaffold).map_err(|e| {
-            format!("append_signoff failed: creating signoff.md: {e}")
-        })?;
+        std::fs::write(&path, scaffold)
+            .map_err(|e| format!("append_signoff failed: creating signoff.md: {e}"))?;
     }
 
     // We hold the exclusive signoff lock — in wave 2 no other writer
@@ -684,7 +701,6 @@ fn append_under_lock(root: &Path, line: &str) -> Result<(), String> {
     if last_byte_is_not_newline(&path)? {
         let mut f = std::fs::OpenOptions::new()
             .append(true)
-            .write(true)
             .open(&path)
             .map_err(|e| format!("append_signoff failed: opening signoff.md: {e}"))?;
         f.write_all(format!("\n{line}\n").as_bytes())
@@ -693,7 +709,6 @@ fn append_under_lock(root: &Path, line: &str) -> Result<(), String> {
     } else {
         let mut f = std::fs::OpenOptions::new()
             .append(true)
-            .write(true)
             .open(&path)
             .map_err(|e| format!("append_signoff failed: opening signoff.md: {e}"))?;
         f.write_all(format!("{line}\n").as_bytes())
@@ -707,7 +722,7 @@ fn append_under_lock(root: &Path, line: &str) -> Result<(), String> {
 /// newline (i.e. a separator must be inserted before the new entry).
 fn last_byte_is_not_newline(path: &Path) -> Result<bool, String> {
     let size = std::fs::metadata(path)
-        .and_then(|m| Ok(m.len()))
+        .map(|m| m.len())
         .map_err(|e| format!("append_signoff failed: stat signoff.md: {e}"))?;
     if size == 0 {
         return Ok(false);
@@ -732,9 +747,7 @@ fn now_epoch() -> Result<u64, String> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .map_err(|e| {
-            format!("append_signoff failed: system clock is before the Unix epoch ({e})")
-        })
+        .map_err(|e| format!("append_signoff failed: system clock is before the Unix epoch ({e})"))
 }
 
 /// `YYYY-MM-DDTHH:MM:SSZ` from epoch seconds — the same convention as
@@ -809,7 +822,10 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         // B measures the dead holder: silent for STALE_AFTER+1.
         let path = plant(&dir, 1, 1, now - STALE_AFTER.as_secs() - 1, "s-dead");
@@ -817,27 +833,41 @@ mod tests {
 
         // A takes over in the meantime: the SAME path now carries a
         // fresh record that B never measured.
-        std::fs::write(&path, format!("pid=2 nonce=2 epoch={now} session=s-successor\n")).unwrap();
+        std::fs::write(
+            &path,
+            format!("pid=2 nonce=2 epoch={now} session=s-successor\n"),
+        )
+        .unwrap();
 
         assert!(
             !remove_stale_lock(&path, &stale),
             "a record that is not the one measured stale is never removed"
         );
         assert_eq!(
-            std::fs::read_to_string(&path).expect("the successor's lock survives the refused takeover"),
+            std::fs::read_to_string(&path)
+                .expect("the successor's lock survives the refused takeover"),
             format!("pid=2 nonce=2 epoch={now} session=s-successor\n"),
             "the successor's fresh lock is left byte-identical"
         );
         // A fresh record is not even measurable as stale: the caller
         // re-enters the bounded retry rather than racing again.
-        assert!(measure_stale_lock(&path).is_none(), "a fresh lock never re-enters the takeover path");
+        assert!(
+            measure_stale_lock(&path).is_none(),
+            "a fresh lock never re-enters the takeover path"
+        );
 
         // The legitimate takeover still works: the file B measured is
         // still the file on disk — removal is ours to make.
         let path = plant(&dir, 3, 3, now - STALE_AFTER.as_secs() - 1, "s-dead-again");
         let stale = measure_stale_lock(&path).expect("the dead holder must measure as stale");
-        assert!(remove_stale_lock(&path, &stale), "the measured stale record IS removable");
-        assert!(!path.exists(), "the takeover removed exactly the file it measured");
+        assert!(
+            remove_stale_lock(&path, &stale),
+            "the measured stale record IS removable"
+        );
+        assert!(
+            !path.exists(),
+            "the takeover removed exactly the file it measured"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

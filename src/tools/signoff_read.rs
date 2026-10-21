@@ -130,9 +130,7 @@ pub fn read_signoff(server: &mut Server, session: &str) -> HandlerResult {
     };
     let parsed = parse_signoff(&text);
     if !gate::handshake(server, session) {
-        return HandlerResult::Err(format!(
-            "read_signoff failed: the handshake record could not be persisted to .state/sessions.json (I/O error — see the server log) — the session is NOT handshaken; no mutating tool is accepted until this call returns successfully"
-        ));
+        return HandlerResult::Err("read_signoff failed: the handshake record could not be persisted to .state/sessions.json (I/O error — see the server log) — the session is NOT handshaken; no mutating tool is accepted until this call returns successfully".to_string());
     }
     HandlerResult::Ok(json!({
         "path": path.display().to_string(),
@@ -250,7 +248,9 @@ fn parse_ranked_line(line: &str) -> Option<(u64, String)> {
     let mut has_digit = false;
     while let Some(ch) = rest.chars().next() {
         if ch.is_ascii_digit() {
-            rank = rank.saturating_mul(10).saturating_add((ch as u64) - ('0' as u64));
+            rank = rank
+                .saturating_mul(10)
+                .saturating_add((ch as u64) - ('0' as u64));
             has_digit = true;
             rest = &rest[ch.len_utf8()..];
         } else {
