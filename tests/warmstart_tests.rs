@@ -327,6 +327,59 @@ fn warmstart_missing_region_refused() {
 }
 
 #[test]
+fn warmstart_replaces_region_under_heading_in_any_letter_case() {
+    for (name, heading) in [
+        ("control", "## If you read nothing else"),
+        ("title", "## If You Read Nothing Else"),
+        ("upper", "## IF YOU READ NOTHING ELSE"),
+        ("lower", "## if you read nothing else"),
+    ] {
+        let dir = tmp_root(&format!("warm-case-{name}"));
+        config::init_state(&dir).unwrap();
+        std::fs::write(
+            dir.join("signoff.md"),
+            SEED.replace("## If you read nothing else", heading),
+        )
+        .unwrap();
+        let mut s = Server::new_server(&dir);
+        match total_recall::tools::signoff_read::read_signoff(&mut s, "probe") {
+            HandlerResult::Ok(_) => {}
+            HandlerResult::Err(e) => panic!("handshake: {e}"),
+        }
+        full_claim(&dir, "probe", "t-warm", &mut s);
+        let r = warmstart::write_warm_start(
+            &mut s,
+            "probe",
+            &json!({"content":"## If you read nothing else\n1. **New item** — fresh prose\n","orchestrator_token":"t-warm"}),
+        );
+        match r {
+            HandlerResult::Ok(v) => {
+                assert_eq!(v["warm_start_lines"], json!(2), "{heading}");
+                assert_eq!(v["history_blocks_moved"], json!(1), "{heading}");
+                assert_eq!(v["tail_bytes_preserved"], json!(true), "{heading}");
+            }
+            HandlerResult::Err(e) => {
+                panic!("{heading}: the region must be found and rewritten: {e}")
+            }
+        }
+        // The new block lands under the content's own heading, the
+        // superseded block keeps its original letter case verbatim in
+        // History, and every byte outside the region is unchanged.
+        assert_eq!(
+            std::fs::read_to_string(dir.join("signoff.md")).unwrap(),
+            format!(
+                "# Signoff\n\n## If you read nothing else\n1. **New item** — fresh prose\n## Worker sessions — sign off here as you go\n\nWorker signoff (alpha) | done: yes | unpushed: none | awaits human: none | still running: no | kaibo review: n/a (no code changes) | workflow: memory-kernel | ts: 2026-09-12T23:41:07Z | session: s-a\n\n## History\n- 2026-09-12 — superseded block prose three\n- Last updated: 2026-09-13 (08:20 PDT) · by this session\n- {heading}\n- 1. **First item** — prose one\n- 2. **Second item** — prose two\n"
+            ),
+            "{heading}: the region is replaced in place, the superseded block verbatim"
+        );
+        assert!(
+            !dir.join(".locks").join("signoff.md.lock").exists(),
+            "the lock is released"
+        );
+    }
+}
+
+#[test]
 fn warmstart_missing_file_refused_no_file_created() {
     let dir = tmp_root("warm-nofile");
     config::init_state(&dir).unwrap();

@@ -297,7 +297,9 @@ fn line_content(line: &str) -> &str {
 /// The reader's warm-start region as a contiguous line range
 /// `[start, end)` — exactly the wave-2 reader's region
 /// (signoff_read `parse_warm_start`): from the
-/// `## If you read nothing else` heading, plus the nearest preceding
+/// `## If you read nothing else` heading — matched in any letter
+/// case (ASCII-insensitive), exactly like the reader — plus the
+/// nearest preceding
 /// NON-BLANK line when that line is a `Last updated:` line (blank
 /// lines are skipped — the real file separates the two with one), up
 /// to the next `## ` heading (or the end of the file). `None` when
@@ -305,7 +307,7 @@ fn line_content(line: &str) -> &str {
 fn locate_region(lines: &[&str]) -> Option<(usize, usize)> {
     let heading = lines
         .iter()
-        .position(|line| line_content(line) == "## If you read nothing else")?;
+        .position(|line| line_content(line).eq_ignore_ascii_case("## If you read nothing else"))?;
     let end = lines[heading + 1..]
         .iter()
         .position(|line| line_content(line).starts_with("## "))

@@ -162,6 +162,66 @@ fn read_signoff_block_without_numbered_lines_has_empty_ranked() {
 }
 
 #[test]
+fn read_signoff_finds_the_warm_start_heading_in_any_letter_case() {
+    for (name, heading) in [
+        ("control", "## If you read nothing else"),
+        ("title", "## If You Read Nothing Else"),
+        ("upper", "## IF YOU READ NOTHING ELSE"),
+        ("lower", "## if you read nothing else"),
+    ] {
+        let dir = tmp_root(&format!("heading-{name}"));
+        let seed = format!(
+            "# Signoff\n\nLast updated: 2026-09-13 (08:20 PDT) · by this session\n\n{heading}\n1. **First item** — prose one\n2. **Second item** — prose two\n"
+        );
+        let mut s = fresh_server(&dir, &seed);
+        let v = match signoff_read::read_signoff(&mut s, "probe") {
+            HandlerResult::Ok(v) => v,
+            HandlerResult::Err(e) => panic!("read_signoff must succeed: {e}"),
+        };
+        let ranked = v["warm_start"]["ranked"].as_array().unwrap();
+        assert_eq!(
+            ranked.len(),
+            2,
+            "{heading}: the numbered lines under it are ranked: {v}"
+        );
+        assert_eq!(ranked[0]["rank"], 1);
+        assert_eq!(ranked[0]["text"], "**First item** — prose one");
+        assert_eq!(ranked[1]["rank"], 2);
+        assert_eq!(ranked[1]["text"], "**Second item** — prose two");
+        assert_eq!(
+            v["warm_start"]["header"],
+            "Last updated: 2026-09-13 (08:20 PDT) · by this session",
+            "{heading}: the Last updated: header is still found before the block"
+        );
+    }
+}
+
+#[test]
+fn read_signoff_without_warm_start_heading_ranks_nothing() {
+    let dir = tmp_root("no-warm-heading");
+    let seed = "# Signoff\n\nProse up top.\n\n## Worker sessions — sign off here as you go\nWorker signoff (alpha) | done: yes | unpushed: none | awaits human: none | still running: no\n\n## History\n- 2026-09-12 — superseded block prose three\n";
+    let mut s = fresh_server(&dir, seed);
+    let v = match signoff_read::read_signoff(&mut s, "probe") {
+        HandlerResult::Ok(v) => v,
+        HandlerResult::Err(e) => panic!("read_signoff must succeed: {e}"),
+    };
+    assert_eq!(
+        v["warm_start"]["header"], "",
+        "no warm-start heading -> no header"
+    );
+    assert!(
+        v["warm_start"]["ranked"].as_array().unwrap().is_empty(),
+        "no warm-start heading -> no invented ranked items: {v}"
+    );
+    assert_eq!(
+        v["warm_start"]["history"].as_array().unwrap().len(),
+        1,
+        "the other sections still parse"
+    );
+    assert_eq!(v["worker_signoffs"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn read_signoff_tolerates_malformed_worker_lines_by_skipping() {
     let dir = tmp_root("malformed");
     let seed = "# Signoff\n\nLast updated: 2026-09-13 (09:00 PDT) · by this session\n\n## If you read nothing else\n1. **Item** — prose\n\n## Worker sessions — sign off here as you go\n\nWorker signoff (truncated\nWorker signoff () | done: yes | unpushed: x | awaits human: y | still running: z\nWorker signoff (orphan) | done: yes\nnot a signoff line\nWorker signoff (gamma) | done: yes | unpushed: none | awaits human: none | still running: no | workflow: wf-g\n";

@@ -176,7 +176,10 @@ struct ParsedWarmStart {
 }
 
 /// The warm-start block: between the line `## If you read nothing
-/// else` and the next line starting `## ` (or EOF). The header is
+/// else` and the next line starting `## ` (or EOF) — the heading
+/// matches in any letter case (ASCII-insensitive: `## If You Read
+/// Nothing Else` and `## IF YOU READ NOTHING ELSE` locate the same
+/// block). The header is
 /// the nearest preceding non-blank line, verbatim and trimmed, when
 /// that line is a `Last updated:` line, else `""` (wave-2 contract —
 /// "immediately preceding" skips blank lines: the real file separates
@@ -184,7 +187,7 @@ struct ParsedWarmStart {
 fn parse_warm_start(lines: &[&str]) -> ParsedWarmStart {
     let Some(heading) = lines
         .iter()
-        .position(|line| *line == "## If you read nothing else")
+        .position(|line| line.eq_ignore_ascii_case("## If you read nothing else"))
     else {
         return ParsedWarmStart {
             header: String::new(),
