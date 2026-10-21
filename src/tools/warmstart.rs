@@ -164,8 +164,13 @@ pub fn write_warm_start(server: &mut Server, session: &str, args: &Value) -> Han
     //    numbered lines UNDER its `## If you read nothing else`
     //    heading — heading-less content used to land as a dead block
     //    (read_signoff answered ranked: [] after a reported-successful
-    //    write). Refuse it loudly, before the lock is acquired.
-    if !content.lines().any(|line| line == "## If you read nothing else") {
+    //    write). Refuse it loudly, before the lock is acquired. The
+    //    heading is matched ASCII-case-insensitively, exactly as the
+    //    reader matches it, so content the reader can read is accepted.
+    if !content
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("## If you read nothing else"))
+    {
         return HandlerResult::Err(
             "write_warm_start refused: content must include its own '## If you read nothing else' heading line — the server stores content verbatim and read_signoff ranks only the numbered lines UNDER that heading, so heading-less content lands as a dead block (read_signoff would answer ranked: []) — nothing written".to_string(),
         );
@@ -297,7 +302,8 @@ fn line_content(line: &str) -> &str {
 /// The reader's warm-start region as a contiguous line range
 /// `[start, end)` — exactly the wave-2 reader's region
 /// (signoff_read `parse_warm_start`): from the
-/// `## If you read nothing else` heading, plus the nearest preceding
+/// `## If you read nothing else` heading (matched ASCII-case-
+/// insensitively, as the reader now does), plus the nearest preceding
 /// NON-BLANK line when that line is a `Last updated:` line (blank
 /// lines are skipped — the real file separates the two with one), up
 /// to the next `## ` heading (or the end of the file). `None` when
@@ -305,7 +311,7 @@ fn line_content(line: &str) -> &str {
 fn locate_region(lines: &[&str]) -> Option<(usize, usize)> {
     let heading = lines
         .iter()
-        .position(|line| line_content(line) == "## If you read nothing else")?;
+        .position(|line| line_content(line).eq_ignore_ascii_case("## If you read nothing else"))?;
     let end = lines[heading + 1..]
         .iter()
         .position(|line| line_content(line).starts_with("## "))

@@ -143,6 +143,54 @@ fn read_signoff_without_last_updated_line_has_empty_header() {
 }
 
 #[test]
+fn read_signoff_finds_warm_start_heading_in_any_case() {
+    // The heading is matched ASCII-case-insensitively: a file that
+    // says `## If You Read Nothing Else` must read back its ranked
+    // items and its header, not as a heading-less file.
+    for (i, heading) in [
+        "## If you read nothing else",
+        "## If You Read Nothing Else",
+        "## IF YOU READ NOTHING ELSE",
+        "## if you read nothing else",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dir = tmp_root(&format!("case-{i}"));
+        let seed = format!(
+            "# Signoff\n\nLast updated: 2026-10-20 — case fixture\n\n{heading}\n1. alpha first\n2. beta second\n\n## History\n- an old line\n"
+        );
+        let mut s = fresh_server(&dir, &seed);
+        let v = match signoff_read::read_signoff(&mut s, "probe") {
+            HandlerResult::Ok(v) => v,
+            HandlerResult::Err(e) => panic!("read_signoff must succeed for {heading:?}: {e}"),
+        };
+        assert_eq!(
+            v["warm_start"]["header"],
+            "Last updated: 2026-10-20 — case fixture",
+            "the header line still attaches to {heading:?}"
+        );
+        let ranked = v["warm_start"]["ranked"].as_array().unwrap();
+        let texts: Vec<&str> = ranked.iter().map(|r| r["text"].as_str().unwrap()).collect();
+        assert_eq!(texts, ["alpha first", "beta second"], "heading {heading:?}");
+    }
+
+    // No heading at all: numbered lines elsewhere in the file are NOT
+    // ranked items — nothing is invented.
+    let dir = tmp_root("case-none");
+    let seed = "# Signoff\n\n1. not a ranked item\n2. still not one\n\n## History\n- an old line\n";
+    let mut s = fresh_server(&dir, seed);
+    let v = match signoff_read::read_signoff(&mut s, "probe") {
+        HandlerResult::Ok(v) => v,
+        HandlerResult::Err(e) => panic!("a heading-less file still reads: {e}"),
+    };
+    assert!(
+        v["warm_start"]["ranked"].as_array().unwrap().is_empty(),
+        "no warm-start heading -> no ranked items: {v}"
+    );
+}
+
+#[test]
 fn read_signoff_block_without_numbered_lines_has_empty_ranked() {
     let dir = tmp_root("noranked");
     let seed = "# Signoff\n\nLast updated: 2026-09-13 (08:20 PDT) · by this session\n\n## If you read nothing else\nJust prose, no numbered lines.\n";

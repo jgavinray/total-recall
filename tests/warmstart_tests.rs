@@ -531,3 +531,95 @@ fn warmstart_heading_less_content_refused_with_the_contract() {
     assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
     assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "no lock file on a pre-lock refusal");
 }
+
+#[test]
+fn warmstart_finds_heading_in_any_case_and_preserves_other_bytes() {
+    for (i, heading) in [
+        "## If you read nothing else",
+        "## If You Read Nothing Else",
+        "## IF YOU READ NOTHING ELSE",
+        "## if you read nothing else",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dir = tmp_root(&format!("warm-case-{i}"));
+        config::init_state(&dir).unwrap();
+        let seed = format!(
+            "# Signoff\n\nLast updated: 2026-09-14 (10:00 PDT)\n\n{heading}\n1. **Old** — prose\n\n## Worker sessions — sign off here as you go\nWorker signoff (gamma) | done: no | session: s-c\n\n## History\n- 2026-09-01 — an earlier entry\n"
+        );
+        std::fs::write(dir.join("signoff.md"), &seed).unwrap();
+        let mut s = Server::new_server(&dir);
+        match total_recall::tools::signoff_read::read_signoff(&mut s, "probe") {
+            HandlerResult::Ok(_) => {}
+            HandlerResult::Err(e) => panic!("handshake: {e}"),
+        }
+        full_claim(&dir, "probe", "t-warm", &mut s);
+        // The content carries its own heading in a third case: the
+        // content check accepts it exactly as the reader does.
+        let content = "## If You Read Nothing Else\n1. **New** — prose\n";
+        let r = warmstart::write_warm_start(
+            &mut s,
+            "probe",
+            &json!({"content": content, "orchestrator_token": "t-warm"}),
+        );
+        match r {
+            HandlerResult::Ok(v) => {
+                assert_eq!(v["warm_start_lines"], json!(2));
+                assert_eq!(v["history_blocks_moved"], json!(1));
+                assert_eq!(v["tail_bytes_preserved"], json!(true));
+            }
+            HandlerResult::Err(e) => panic!("the rewrite must succeed for {heading:?}: {e}"),
+        }
+        // Every byte outside the located region is the original's: the
+        // worker section and the earlier History entry survive, and
+        // the superseded heading keeps ITS case in History.
+        let expected = format!(
+            "# Signoff\n\n## If You Read Nothing Else\n1. **New** — prose\n## Worker sessions — sign off here as you go\nWorker signoff (gamma) | done: no | session: s-c\n\n## History\n- 2026-09-01 — an earlier entry\n- Last updated: 2026-09-14 (10:00 PDT)\n- {heading}\n- 1. **Old** — prose\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("signoff.md")).unwrap(),
+            expected,
+            "only the located region is rewritten"
+        );
+        // The written block reads back in a fresh session.
+        let mut s2 = Server::new_server(&dir);
+        let v = match total_recall::tools::signoff_read::read_signoff(&mut s2, "probe2") {
+            HandlerResult::Ok(v) => v,
+            HandlerResult::Err(e) => panic!("read-back: {e}"),
+        };
+        let ranked = v["warm_start"]["ranked"].as_array().unwrap();
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0]["text"], "**New** — prose");
+        assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "the lock is released");
+    }
+}
+
+#[test]
+fn warmstart_no_heading_refused_even_with_numbered_lines() {
+    let dir = tmp_root("warm-noheading-lines");
+    config::init_state(&dir).unwrap();
+    let seed = "# Signoff\n\n1. not a ranked item\n2. still not one\n\n## History\n- an old line\n";
+    std::fs::write(dir.join("signoff.md"), seed).unwrap();
+    let before = std::fs::read(dir.join("signoff.md")).unwrap();
+    let mut s = Server::new_server(&dir);
+    match total_recall::tools::signoff_read::read_signoff(&mut s, "probe") {
+        HandlerResult::Ok(_) => {}
+        HandlerResult::Err(e) => panic!("handshake: {e}"),
+    }
+    full_claim(&dir, "probe", "t-warm", &mut s);
+    let r = warmstart::write_warm_start(
+        &mut s,
+        "probe",
+        &json!({"content": "## If you read nothing else\n1. new item\n", "orchestrator_token": "t-warm"}),
+    );
+    match r {
+        HandlerResult::Err(msg) => assert!(
+            msg.contains("cannot locate") && msg.contains("warm-start region"),
+            "a heading-less file must refuse with the region contract: {msg}"
+        ),
+        HandlerResult::Ok(_) => panic!("a file with no warm-start heading must refuse"),
+    }
+    assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
+    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "no lock file left behind");
+}
