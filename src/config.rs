@@ -2,9 +2,9 @@
 //!
 //! Precedence: `--root` flag > `EXOMEMORY_DIR` > `EXO_DIR` (legacy alias)
 //! > `~/.config/exomemory/config.toml` key `root` > default
-//! `~/dev/exomemory/`. The default is a convenience for the reference
-//! deployment, NOT part of the contract — any directory satisfying the
-//! spec's storage layout is a valid root.
+//! > `~/dev/exomemory/`. The default is a convenience for the reference
+//! > deployment, NOT part of the contract — any directory satisfying the
+//! > spec's storage layout is a valid root.
 //!
 //! Loud refusals (spec §2, §13):
 //! - both env names set to different paths → `Err`, even when a flag
@@ -41,8 +41,11 @@ pub const CONFIG_FILE_RELATIVE: &str = ".config/exomemory/config.toml";
 /// Zone databases probed to verify an `EXO_TZ` name before trusting
 /// `date` with it (macOS ships `/var/db/timezone/zoneinfo`, most Linux
 /// `/usr/share/zoneinfo` or `/usr/lib/zoneinfo`).
-const ZONEINFO_BASES: &[&str] =
-    &["/var/db/timezone/zoneinfo", "/usr/share/zoneinfo", "/usr/lib/zoneinfo"];
+const ZONEINFO_BASES: &[&str] = &[
+    "/var/db/timezone/zoneinfo",
+    "/usr/share/zoneinfo",
+    "/usr/lib/zoneinfo",
+];
 
 /// Resolves the memory root (spec §2 precedence: flag > `EXOMEMORY_DIR`
 /// > `EXO_DIR` > config file > default).
@@ -52,18 +55,27 @@ const ZONEINFO_BASES: &[&str] =
 /// `EXOMEMORY_DIR`; the two env names disagreeing means two planes on two
 /// directories, which the spec refuses at startup (spec §2, §13).
 pub fn resolve_root(args: &ConfigArgs) -> Result<PathBuf, String> {
-    let canonical = std::env::var("EXOMEMORY_DIR").ok().filter(|s| !s.trim().is_empty());
-    let legacy = std::env::var("EXO_DIR").ok().filter(|s| !s.trim().is_empty());
+    let canonical = std::env::var("EXOMEMORY_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let legacy = std::env::var("EXO_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
 
     if let (Some(a), Some(b)) = (&canonical, &legacy) {
         if a != b {
-            return Err("EXOMEMORY_DIR and EXO_DIR resolve to different roots — misconfiguration".into());
+            return Err(
+                "EXOMEMORY_DIR and EXO_DIR resolve to different roots — misconfiguration".into(),
+            );
         }
     }
 
     let chosen = if let Some(flag) = &args.cli_root {
         if flag.trim().is_empty() {
-            return Err("--root is empty — refusing to start (point it at the memory root directory)".into());
+            return Err(
+                "--root is empty — refusing to start (point it at the memory root directory)"
+                    .into(),
+            );
         }
         Some(flag.clone())
     } else if let Some(env) = &canonical {
@@ -213,11 +225,9 @@ fn zone_offset_minutes(zone: &str) -> Result<i64, String> {
             "EXO_TZ='{zone}' is not a usable IANA zone (expected a relative zone path like 'America/New_York') — refusing to start"
         ));
     }
-    if !ZONEINFO_BASES
-        .iter()
-        .any(|base| Path::new(base).join(zone).is_file()
-            || Path::new(base).join(format!("{zone}0")).is_file())
-    {
+    if !ZONEINFO_BASES.iter().any(|base| {
+        Path::new(base).join(zone).is_file() || Path::new(base).join(format!("{zone}0")).is_file()
+    }) {
         return Err(format!(
             "EXO_TZ='{zone}' is not a known IANA timezone on this system — refusing to start (an unrecognized zone would fall back to UTC silently and mislabel every day boundary)"
         ));
@@ -226,7 +236,9 @@ fn zone_offset_minutes(zone: &str) -> Result<i64, String> {
         .env("TZ", zone)
         .arg("+%z")
         .output()
-        .map_err(|e| format!("cannot run `date` to resolve the timezone offset for '{zone}': {e}"))?;
+        .map_err(|e| {
+            format!("cannot run `date` to resolve the timezone offset for '{zone}': {e}")
+        })?;
     if !output.status.success() {
         return Err(format!(
             "the system timezone database rejects '{zone}' — refusing to start"
@@ -431,8 +443,8 @@ mod calendar_tests {
     fn civil_from_days_matches_oracle_dates() {
         let vectors: &[(i64, i64, u32, u32)] = &[
             (-25_508, 1900, 3, 1), // 1900: century, not a leap year
-            (-1, 1969, 12, 31), // the day before the epoch
-            (0, 1970, 1, 1), // the epoch itself
+            (-1, 1969, 12, 31),    // the day before the epoch
+            (0, 1970, 1, 1),       // the epoch itself
             (1, 1970, 1, 2),
             (10_957, 2000, 1, 1), // 2000: the century that IS a leap year
             (11_021, 2000, 3, 5),

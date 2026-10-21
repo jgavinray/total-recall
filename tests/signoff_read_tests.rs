@@ -8,13 +8,13 @@
 //! compiles only once BOTH wave-2 modules land; a missing sibling
 //! module is the intended loud failure, never something to fix here.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use serde_json::json;
 use total_recall::config;
 use total_recall::gate;
 use total_recall::rpc::{HandlerResult, Server};
 use total_recall::tools::signoff_read;
-use serde_json::json;
 
 fn tmp_root(name: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!(
@@ -27,7 +27,7 @@ fn tmp_root(name: &str) -> PathBuf {
 }
 
 /// A fresh server on a temp root with the given signoff.md content.
-fn fresh_server(root: &PathBuf, content: &str) -> Server {
+fn fresh_server(root: &Path, content: &str) -> Server {
     config::init_state(root).unwrap();
     std::fs::write(root.join("signoff.md"), content).unwrap();
     Server::new_server(root)
@@ -116,7 +116,8 @@ fn read_signoff_parses_full_seed() {
     assert_eq!(beta["awaits_human"], "CI label");
     assert_eq!(beta["still_running"], "2 (vllm eval)");
     assert!(
-        beta["kaibo_review"].is_null() && beta["workflow"].is_null()
+        beta["kaibo_review"].is_null()
+            && beta["workflow"].is_null()
             && beta["ts"].is_null()
             && beta["session"].is_null(),
         "absent optional fields -> null: {beta}"
@@ -135,8 +136,7 @@ fn read_signoff_without_last_updated_line_has_empty_header() {
         HandlerResult::Err(e) => panic!("read_signoff must succeed: {e}"),
     };
     assert_eq!(
-        v["warm_start"]["header"],
-        "",
+        v["warm_start"]["header"], "",
         "no Last updated: line -> empty header"
     );
     assert_eq!(v["warm_start"]["ranked"].as_array().unwrap().len(), 1);
@@ -166,8 +166,7 @@ fn read_signoff_finds_warm_start_heading_in_any_case() {
             HandlerResult::Err(e) => panic!("read_signoff must succeed for {heading:?}: {e}"),
         };
         assert_eq!(
-            v["warm_start"]["header"],
-            "Last updated: 2026-10-20 — case fixture",
+            v["warm_start"]["header"], "Last updated: 2026-10-20 — case fixture",
             "the header line still attaches to {heading:?}"
         );
         let ranked = v["warm_start"]["ranked"].as_array().unwrap();
@@ -281,13 +280,18 @@ fn gate_refuses_before_handshake_counts_and_releases_after() {
         HandlerResult::Err(e) => panic!("read_signoff must succeed: {e}"),
     }
     assert_eq!(s.handshaken.get("probe").copied(), Some(true));
-    assert!(gate::gate(&mut s, "probe").is_ok(), "the gate opens after the handshake");
-    assert!(!gate::gate(&mut s, "other").is_ok(), "the gate is per-session");
+    assert!(
+        gate::gate(&mut s, "probe").is_ok(),
+        "the gate opens after the handshake"
+    );
+    assert!(
+        gate::gate(&mut s, "other").is_err(),
+        "the gate is per-session"
+    );
     // The record persists {session_id, handshaked_at} entries …
     let sessions: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join(".state/sessions.json"))
-            .unwrap())
-        .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(dir.join(".state/sessions.json")).unwrap())
+            .unwrap();
     let entries = sessions.as_array().unwrap();
     assert_eq!(
         entries
@@ -297,10 +301,7 @@ fn gate_refuses_before_handshake_counts_and_releases_after() {
         1,
         "the record persists the session id"
     );
-    let entry = entries
-        .iter()
-        .find(|e| e["session_id"] == "probe")
-        .unwrap();
+    let entry = entries.iter().find(|e| e["session_id"] == "probe").unwrap();
     let stamp = entry["handshaked_at"].as_str().unwrap();
     assert!(
         stamp.len() == 20 && stamp.ends_with('Z'),
@@ -310,9 +311,8 @@ fn gate_refuses_before_handshake_counts_and_releases_after() {
     // duplicate record entry.
     let _ = signoff_read::read_signoff(&mut s, "probe");
     let sessions: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join(".state/sessions.json"))
-            .unwrap())
-        .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(dir.join(".state/sessions.json")).unwrap())
+            .unwrap();
     assert_eq!(
         sessions
             .as_array()
@@ -332,7 +332,10 @@ fn read_signoff_missing_file_refuses_loudly_without_handshake() {
     let mut s = Server::new_server(&dir);
     match signoff_read::read_signoff(&mut s, "probe") {
         HandlerResult::Err(msg) => {
-            assert!(msg.contains("read_signoff failed"), "must refuse loudly: {msg}")
+            assert!(
+                msg.contains("read_signoff failed"),
+                "must refuse loudly: {msg}"
+            )
         }
         HandlerResult::Ok(_) => panic!("a missing signoff.md must not grant the handshake"),
     }
@@ -340,8 +343,14 @@ fn read_signoff_missing_file_refuses_loudly_without_handshake() {
         s.handshaken.get("probe").copied() != Some(true),
         "no handshake on failure"
     );
-    assert!(!dir.join(".state/sessions.json").exists(), "no record on failure");
-    assert!(!gate::gate(&mut s, "probe").is_ok(), "the gate stays closed");
+    assert!(
+        !dir.join(".state/sessions.json").exists(),
+        "no record on failure"
+    );
+    assert!(
+        gate::gate(&mut s, "probe").is_err(),
+        "the gate stays closed"
+    );
 }
 
 #[test]
@@ -352,11 +361,12 @@ fn tools_and_handlers_advertise_read_signoff_per_spec() {
     assert!(tools[0]
         .description
         .starts_with("MANDATORY FIRST CALL of every session."));
-    assert!(tools[0].description.contains("RECORDS the session handshake"));
+    assert!(tools[0]
+        .description
+        .contains("RECORDS the session handshake"));
     assert_eq!(tools[0].input_schema["type"], "object");
     assert_eq!(tools[0].input_schema["additionalProperties"], false);
-    assert!(tools[0]
-        .input_schema["properties"]
+    assert!(tools[0].input_schema["properties"]
         .as_object()
         .map(|o| o.is_empty())
         .unwrap_or(false));

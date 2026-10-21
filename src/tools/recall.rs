@@ -117,12 +117,7 @@ pub fn recall(server: &mut Server, _session: &str, arguments: &Value) -> Handler
     // arrives as a field and must be refused as one.
     let unknown: Vec<&str> = args
         .keys()
-        .filter(|key| {
-            !matches!(
-                key.as_str(),
-                "query" | "scope" | "workflow" | "since"
-            )
-        })
+        .filter(|key| !matches!(key.as_str(), "query" | "scope" | "workflow" | "since"))
         .map(String::as_str)
         .collect();
     if !unknown.is_empty() {
@@ -160,8 +155,8 @@ pub fn recall(server: &mut Server, _session: &str, arguments: &Value) -> Handler
             Some("all") => Scope::All,
             Some(other) => {
                 return HandlerResult::Err(format!(
-                    "recall refused: scope must be one of dayfile|signoff|briefs|all (got {other:?})"
-                ))
+                "recall refused: scope must be one of dayfile|signoff|briefs|all (got {other:?})"
+            ))
             }
             None => {
                 return HandlerResult::Err(format!(
@@ -208,9 +203,7 @@ pub fn recall(server: &mut Server, _session: &str, arguments: &Value) -> Handler
     // set a broken search would produce.
     let query = match Query::compile(query) {
         Ok(compiled) => compiled,
-        Err(err) => {
-            return HandlerResult::Err(format!("recall refused: {err} (query: {query:?})"))
-        }
+        Err(err) => return HandlerResult::Err(format!("recall refused: {err} (query: {query:?})")),
     };
 
     // 2. buckets — enumerated, never asked for.

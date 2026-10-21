@@ -128,7 +128,9 @@ pub fn session_compliance(server: &mut Server, session: &str, arguments: &Value)
         .map(|(id, gate_key)| {
             let writes: Vec<&Value> = audit
                 .iter()
-                .filter(|entry| entry.get("session_id").and_then(Value::as_str) == Some(id.as_str()))
+                .filter(|entry| {
+                    entry.get("session_id").and_then(Value::as_str) == Some(id.as_str())
+                })
                 .collect();
             // The trail is append-ordered per file and the files are read
             // in date order, so the FIRST entry carrying the identity is
@@ -190,9 +192,8 @@ fn audit_entries(root: &std::path::Path) -> Result<Vec<Value>, String> {
     for entry in std::fs::read_dir(&dir)
         .map_err(|err| format!("session_compliance refused: cannot list .audit/: {err}"))?
     {
-        let entry = entry.map_err(|err| {
-            format!("session_compliance refused: listing .audit/: {err}")
-        })?;
+        let entry =
+            entry.map_err(|err| format!("session_compliance refused: listing .audit/: {err}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
         if !name.ends_with(".jsonl") || name.starts_with('.') {
             continue;

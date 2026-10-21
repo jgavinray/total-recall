@@ -15,14 +15,17 @@
 //!   isError:true + content array (never a JSON-RPC error object).
 //! - Fresh configured root starts EMPTY: only `.state/` exists after init.
 
+use serde_json::json;
 use total_recall::config::{self, ConfigArgs};
 use total_recall::rpc::{self, Server};
-use serde_json::json;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 static ENV_SPIN: AtomicUsize = AtomicUsize::new(0);
 fn env_acquire() {
-    while ENV_SPIN.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+    while ENV_SPIN
+        .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
         std::thread::yield_now();
     }
 }
@@ -30,7 +33,10 @@ fn env_release() {
     ENV_SPIN.store(0, Ordering::Release);
 }
 fn tmp_root(name: &str) -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!("total-recall-gate-w1-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!(
+        "total-recall-gate-w1-{name}-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -69,7 +75,10 @@ fn resolve_root_two_env_names_differing_is_loud() {
     std::env::set_var("EXOMEMORY_DIR", a.display().to_string());
     std::env::set_var("EXO_DIR", b.display().to_string());
     let err = config::resolve_root(&ConfigArgs { cli_root: None }).unwrap_err();
-    assert!(!err.is_empty(), "both env names differing must refuse loudly");
+    assert!(
+        !err.is_empty(),
+        "both env names differing must refuse loudly"
+    );
     std::env::remove_var("EXOMEMORY_DIR");
     std::env::remove_var("EXO_DIR");
     env_release();
@@ -139,9 +148,15 @@ fn rpc_unknown_tool_name_is_32602_not_32601() {
     .unwrap_err();
     assert!(out.contains("-32602"), "unknown tool must be -32602: {out}");
     // Same for tools/list with an unknown method: -32601 (method not found).
-    let out2 = rpc::handle_frame(&mut s, r#"{"jsonrpc":"2.0","id":3,"method":"tools/nope","params":{}}"#)
-        .unwrap_err();
-    assert!(out2.contains("-32601"), "unknown method must be -32601: {out2}");
+    let out2 = rpc::handle_frame(
+        &mut s,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/nope","params":{}}"#,
+    )
+    .unwrap_err();
+    assert!(
+        out2.contains("-32601"),
+        "unknown method must be -32601: {out2}"
+    );
 }
 
 #[test]
@@ -150,7 +165,10 @@ fn rpc_malformed_frame_is_32700_parse_error() {
     config::init_state(&dir).unwrap();
     let mut s = Server::new_server(&dir);
     let out = rpc::handle_frame(&mut s, "{not json").unwrap_err();
-    assert!(out.contains("-32700"), "malformed frame must be -32700: {out}");
+    assert!(
+        out.contains("-32700"),
+        "malformed frame must be -32700: {out}"
+    );
 }
 
 #[test]
@@ -167,9 +185,15 @@ fn rpc_refusal_is_result_with_iserror_no_side_effect() {
     )
     .unwrap();
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert!(v["result"]["isError"].as_bool().unwrap(), "refusal must be isError:true");
+    assert!(
+        v["result"]["isError"].as_bool().unwrap(),
+        "refusal must be isError:true"
+    );
     assert!(v["result"]["content"].is_array());
-    assert!(v["error"].is_null(), "refusal must NOT be a JSON-RPC error object");
+    assert!(
+        v["error"].is_null(),
+        "refusal must NOT be a JSON-RPC error object"
+    );
     assert!(
         !dir.join("signoff.md").exists(),
         "side effect must be ABSENT: no signoff.md created"

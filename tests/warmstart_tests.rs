@@ -35,15 +35,18 @@
 //!   the region boundary stays clean (the file ends with a newline,
 //!   the byte-exact expectation is unchanged).
 
-use total_recall::config;
-use total_recall::rpc::{HandlerResult, Server};
-use total_recall::tools::warmstart;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
+use total_recall::config;
+use total_recall::rpc::{HandlerResult, Server};
+use total_recall::tools::warmstart;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("total-recall-warmstart-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!(
+        "total-recall-warmstart-{name}-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -100,8 +103,16 @@ Worker signoff (alpha) | done: yes | unpushed: none | awaits human: none | still
 /// to a date the box's local calendar can drift past.
 fn local_date() -> String {
     let (_, offset) = config::resolve_tz().unwrap();
-    let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64 + offset * 60;
-    let days = if now >= 0 { now / 86_400 } else { (now - 86_399) / 86_400 };
+    let now = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        + offset * 60;
+    let days = if now >= 0 {
+        now / 86_400
+    } else {
+        (now - 86_399) / 86_400
+    };
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -110,13 +121,17 @@ fn local_date() -> String {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
-    let (year, m) = if mp < 10 { (y, mp + 3) } else { (y + 1, mp - 9) };
+    let (year, m) = if mp < 10 {
+        (y, mp + 3)
+    } else {
+        (y + 1, mp - 9)
+    };
     format!("{year:04}-{:02}-{:02}", m, day)
 }
 
 /// The gate's fixture: fresh tmp root + init fingerprint + the SEED
 /// signoff.md + the `probe` session's handshake.
-fn seeded(root: &PathBuf) -> Server {
+fn seeded(root: &Path) -> Server {
     config::init_state(root).unwrap();
     std::fs::write(root.join("signoff.md"), SEED).unwrap();
     let mut s = Server::new_server(root);
@@ -138,7 +153,11 @@ fn plant_claim_file(root: &Path, session: &str, token: &str) {
         "token": token,
         "acquired_at": "2026-09-14T00:00:00Z"
     });
-    std::fs::write(dir.join(format!("orchestrator-{}", local_date())), v.to_string()).unwrap();
+    std::fs::write(
+        dir.join(format!("orchestrator-{}", local_date())),
+        v.to_string(),
+    )
+    .unwrap();
 }
 
 /// The full claim state: the on-disk record AND the server's
@@ -147,7 +166,8 @@ fn plant_claim_file(root: &Path, session: &str, token: &str) {
 /// compare against.
 fn full_claim(root: &Path, session: &str, token: &str, s: &mut Server) {
     plant_claim_file(root, session, token);
-    s.claim_tokens.insert(session.to_string(), token.to_string());
+    s.claim_tokens
+        .insert(session.to_string(), token.to_string());
 }
 
 /// The shared refusal assertion: Err naming the claim leg,
@@ -163,8 +183,15 @@ fn assert_refused(r: HandlerResult, dir: &Path, before: &[u8]) {
         }
         HandlerResult::Ok(_) => panic!("must refuse"),
     }
-    assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "no lock file on a pre-lock refusal");
+    assert_eq!(
+        std::fs::read(dir.join("signoff.md")).unwrap(),
+        before,
+        "signoff.md byte-identical"
+    );
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "no lock file on a pre-lock refusal"
+    );
 }
 
 #[test]
@@ -192,8 +219,15 @@ fn warmstart_pre_handshake_refused_and_counted() {
         Some(1),
         "one refused attempt is counted exactly once (a double gate would tick it twice)"
     );
-    assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "no lock file before the gate opens");
+    assert_eq!(
+        std::fs::read(dir.join("signoff.md")).unwrap(),
+        before,
+        "signoff.md byte-identical"
+    );
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "no lock file before the gate opens"
+    );
 }
 
 #[test]
@@ -262,7 +296,8 @@ fn warmstart_success_exact_bytes_and_no_leftovers() {
     let dir = tmp_root("warm-ok");
     let mut s = seeded(&dir);
     full_claim(&dir, "probe", "t-warm", &mut s);
-    let content = "Last updated: 2026-09-13\n\n## If you read nothing else\n1. **New item** — fresh prose\n";
+    let content =
+        "Last updated: 2026-09-13\n\n## If you read nothing else\n1. **New item** — fresh prose\n";
     let r = warmstart::write_warm_start(
         &mut s,
         "probe",
@@ -287,19 +322,21 @@ fn warmstart_success_exact_bytes_and_no_leftovers() {
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .filter(|n| n.starts_with(".signoff.md.tmp-"))
         .collect();
-    assert!(leftovers.is_empty(), "no tmp file survives the rename: {leftovers:?}");
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "the lock is released");
+    assert!(
+        leftovers.is_empty(),
+        "no tmp file survives the rename: {leftovers:?}"
+    );
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "the lock is released"
+    );
 }
 
 #[test]
 fn warmstart_missing_region_refused() {
     let dir = tmp_root("warm-noregion");
     config::init_state(&dir).unwrap();
-    std::fs::write(
-        dir.join("signoff.md"),
-        "# Signoff\n\n## Workers\nW1\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("signoff.md"), "# Signoff\n\n## Workers\nW1\n").unwrap();
     let before = std::fs::read(dir.join("signoff.md")).unwrap();
     let mut s = Server::new_server(&dir);
     match total_recall::tools::signoff_read::read_signoff(&mut s, "probe") {
@@ -316,14 +353,24 @@ fn warmstart_missing_region_refused() {
         HandlerResult::Err(msg) => assert!(!msg.is_empty(), "a missing region must refuse loudly"),
         HandlerResult::Ok(_) => panic!("a file with no warm-start region must refuse"),
     }
-    assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "no lock file left behind");
+    assert_eq!(
+        std::fs::read(dir.join("signoff.md")).unwrap(),
+        before,
+        "signoff.md byte-identical"
+    );
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "no lock file left behind"
+    );
     let leftovers: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .filter(|n| n.starts_with(".signoff.md.tmp-"))
         .collect();
-    assert!(leftovers.is_empty(), "no tmp file left behind: {leftovers:?}");
+    assert!(
+        leftovers.is_empty(),
+        "no tmp file left behind: {leftovers:?}"
+    );
 }
 
 #[test]
@@ -347,17 +394,25 @@ fn warmstart_missing_file_refused_no_file_created() {
         &json!({"content":"new warm","orchestrator_token":"t-warm"}),
     );
     match r {
-        HandlerResult::Err(msg) => assert!(!msg.is_empty(), "a missing signoff.md must refuse loudly"),
+        HandlerResult::Err(msg) => {
+            assert!(!msg.is_empty(), "a missing signoff.md must refuse loudly")
+        }
         HandlerResult::Ok(_) => panic!("an absent signoff.md has no region to rewrite"),
     }
     assert!(!dir.join("signoff.md").exists(), "no signoff.md is created");
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "no lock file left behind");
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "no lock file left behind"
+    );
     let leftovers: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .filter(|n| n.starts_with(".signoff.md.tmp-"))
         .collect();
-    assert!(leftovers.is_empty(), "no tmp file left behind: {leftovers:?}");
+    assert!(
+        leftovers.is_empty(),
+        "no tmp file left behind: {leftovers:?}"
+    );
 }
 
 #[test]
@@ -378,8 +433,15 @@ fn warmstart_bad_args_refused_before_lock() {
             HandlerResult::Ok(_) => panic!("bad args {args} must be refused"),
         }
     }
-    assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "the args gate runs before the lock is taken");
+    assert_eq!(
+        std::fs::read(dir.join("signoff.md")).unwrap(),
+        before,
+        "signoff.md byte-identical"
+    );
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "the args gate runs before the lock is taken"
+    );
 }
 
 #[test]
@@ -421,7 +483,10 @@ Worker signoff (beta) | done: yes | session: s-b
 - - old item two
 "#
     );
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "the lock is released");
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "the lock is released"
+    );
 }
 
 #[test]
@@ -470,7 +535,10 @@ Worker signoff (gamma) | done: no | session: s-c
 tail prose preserved
 "#
     );
-    assert!(text.contains("tail prose preserved"), "the bytes after the History section survive verbatim");
+    assert!(
+        text.contains("tail prose preserved"),
+        "the bytes after the History section survive verbatim"
+    );
     let _ = before;
 }
 
@@ -482,7 +550,8 @@ fn warmstart_content_without_trailing_newline_normalized() {
     // The same block as the gate's success content, MINUS the final
     // newline: the tool must normalize the region boundary instead of
     // fusing the new block with the next heading.
-    let content = "Last updated: 2026-09-13\n\n## If you read nothing else\n1. **New item** — fresh prose";
+    let content =
+        "Last updated: 2026-09-13\n\n## If you read nothing else\n1. **New item** — fresh prose";
     let r = warmstart::write_warm_start(
         &mut s,
         "probe",
@@ -490,7 +559,9 @@ fn warmstart_content_without_trailing_newline_normalized() {
     );
     match r {
         HandlerResult::Ok(_) => {}
-        HandlerResult::Err(e) => panic!("a missing trailing newline is normalized, not refused: {e}"),
+        HandlerResult::Err(e) => {
+            panic!("a missing trailing newline is normalized, not refused: {e}")
+        }
     }
     let text = std::fs::read_to_string(dir.join("signoff.md")).unwrap();
     assert!(
@@ -499,7 +570,10 @@ fn warmstart_content_without_trailing_newline_normalized() {
     );
     assert!(text.ends_with('\n'), "the file ends with a newline");
     assert_eq!(text, EXPECTED, "normalization changes no other byte");
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "the lock is released");
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "the lock is released"
+    );
 }
 
 #[test]
@@ -528,8 +602,15 @@ fn warmstart_heading_less_content_refused_with_the_contract() {
             panic!("heading-less content must be refused, never stored as a dead block")
         }
     }
-    assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "no lock file on a pre-lock refusal");
+    assert_eq!(
+        std::fs::read(dir.join("signoff.md")).unwrap(),
+        before,
+        "signoff.md byte-identical"
+    );
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "no lock file on a pre-lock refusal"
+    );
 }
 
 #[test]
@@ -591,7 +672,10 @@ fn warmstart_finds_heading_in_any_case_and_preserves_other_bytes() {
         let ranked = v["warm_start"]["ranked"].as_array().unwrap();
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0]["text"], "**New** — prose");
-        assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "the lock is released");
+        assert!(
+            !dir.join(".locks").join("signoff.md.lock").exists(),
+            "the lock is released"
+        );
     }
 }
 
@@ -620,6 +704,13 @@ fn warmstart_no_heading_refused_even_with_numbered_lines() {
         ),
         HandlerResult::Ok(_) => panic!("a file with no warm-start heading must refuse"),
     }
-    assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
-    assert!(!dir.join(".locks").join("signoff.md.lock").exists(), "no lock file left behind");
+    assert_eq!(
+        std::fs::read(dir.join("signoff.md")).unwrap(),
+        before,
+        "signoff.md byte-identical"
+    );
+    assert!(
+        !dir.join(".locks").join("signoff.md.lock").exists(),
+        "no lock file left behind"
+    );
 }

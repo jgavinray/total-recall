@@ -22,20 +22,23 @@
 //!   tail must be byte-identical or the tool fails LOUDLY and keeps the old file.
 //! - Every refusal asserts absence of side effects (byte-identical/absent target).
 
+use serde_json::json;
+use std::path::{Path, PathBuf};
 use total_recall::config;
 use total_recall::rpc::{HandlerResult, Server};
 use total_recall::tools::{briefs, claims, warmstart};
-use serde_json::json;
-use std::path::PathBuf;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("total-recall-gate-w3-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!(
+        "total-recall-gate-w3-{name}-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
 }
 
-fn seeded(root: &PathBuf) -> Server {
+fn seeded(root: &Path) -> Server {
     config::init_state(root).unwrap();
     std::fs::write(root.join("signoff.md"), SEED).unwrap();
     let mut s = Server::new_server(root);
@@ -47,8 +50,16 @@ fn seeded(root: &PathBuf) -> Server {
 /// a date the box's local calendar can drift past.
 fn local_date() -> String {
     let (_, offset) = config::resolve_tz().unwrap();
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 + offset * 60;
-    let days = if now >= 0 { now / 86_400 } else { (now - 86_399) / 86_400 };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        + offset * 60;
+    let days = if now >= 0 {
+        now / 86_400
+    } else {
+        (now - 86_399) / 86_400
+    };
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -57,7 +68,11 @@ fn local_date() -> String {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
-    let (year, m) = if mp < 10 { (y, mp + 3) } else { (y + 1, mp - 9) };
+    let (year, m) = if mp < 10 {
+        (y, mp + 3)
+    } else {
+        (y + 1, mp - 9)
+    };
     format!("{year:04}-{:02}-{:02}", m, day)
 }
 
@@ -126,11 +141,17 @@ fn claim_other_session_refused_with_holder_and_file_unchanged() {
     let r = claims::claim_orchestrator(&mut s, "intruder", &json!({}));
     match r {
         HandlerResult::Err(msg) => {
-            assert!(msg.contains("holder") || msg.contains("held"), "refusal must name the holder: {msg}");
+            assert!(
+                msg.contains("holder") || msg.contains("held"),
+                "refusal must name the holder: {msg}"
+            );
         }
         HandlerResult::Ok(_) => panic!("different session must be refused"),
     }
-    assert_eq!(std::fs::read(dir.join(format!(".claims/orchestrator-{date}"))).unwrap(), before);
+    assert_eq!(
+        std::fs::read(dir.join(format!(".claims/orchestrator-{date}"))).unwrap(),
+        before
+    );
 }
 
 #[test]
@@ -138,12 +159,22 @@ fn dayfile_without_token_refused_no_file() {
     let dir = tmp_root("dayfile-notoken");
     let mut s = seeded(&dir);
     let date = local_date();
-    let r = claims::write_dayfile(&mut s, "probe", &json!({"content":"body","orchestrator_token":"bogus"}));
+    let r = claims::write_dayfile(
+        &mut s,
+        "probe",
+        &json!({"content":"body","orchestrator_token":"bogus"}),
+    );
     match r {
-        HandlerResult::Err(msg) => assert!(msg.contains("claim") || msg.contains("token"), "refusal must name the claim: {msg}"),
+        HandlerResult::Err(msg) => assert!(
+            msg.contains("claim") || msg.contains("token"),
+            "refusal must name the claim: {msg}"
+        ),
         HandlerResult::Ok(_) => panic!("must refuse without a valid token"),
     }
-    assert!(!dir.join(format!("{date}.md")).exists(), "no day file created");
+    assert!(
+        !dir.join(format!("{date}.md")).exists(),
+        "no day file created"
+    );
 }
 
 #[test]
@@ -156,7 +187,11 @@ fn dayfile_with_token_replaces_file_byte_exact() {
     };
     let date = local_date();
     let content = "# Day\n\n- decision recorded\n";
-    match claims::write_dayfile(&mut s, "probe", &json!({"content": content, "orchestrator_token": tok})) {
+    match claims::write_dayfile(
+        &mut s,
+        "probe",
+        &json!({"content": content, "orchestrator_token": tok}),
+    ) {
         HandlerResult::Err(e) => panic!("dayfile write must succeed: {e}"),
         HandlerResult::Ok(_) => {}
     }
@@ -170,7 +205,10 @@ fn brief_without_token_refused_no_files() {
     let mut s = seeded(&dir);
     let r = briefs::write_brief(&mut s, "probe", &json!({"worker":"alpha","brief":"body"}));
     match r {
-        HandlerResult::Err(msg) => assert!(msg.contains("claim") || msg.contains("token"), "refusal must name the claim: {msg}"),
+        HandlerResult::Err(msg) => assert!(
+            msg.contains("claim") || msg.contains("token"),
+            "refusal must name the claim: {msg}"
+        ),
         HandlerResult::Ok(_) => panic!("must refuse without a valid token"),
     }
     assert!(!dir.join("briefs").exists(), "no briefs/ created");
@@ -205,16 +243,24 @@ fn brief_with_token_writes_and_archives_distinct_names() {
     }
     let cur = std::fs::read_to_string(dir.join("briefs/alpha.md")).unwrap();
     assert_eq!(cur, b2, "briefs/<worker>.md holds the latest brief");
-    let mut names: Vec<String> = std::fs::read_dir(dir.join("briefs")).unwrap()
+    let mut names: Vec<String> = std::fs::read_dir(dir.join("briefs"))
+        .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .filter(|n| n.starts_with("alpha-") && n.ends_with(".md"))
         .collect();
     names.sort();
-    assert_eq!(names.len(), 2, "two distinct archives for one worker one day");
+    assert_eq!(
+        names.len(),
+        2,
+        "two distinct archives for one worker one day"
+    );
     assert_ne!(names[0], names[1]);
     for n in &names {
         // <worker>-<superseded-date>T<HHMMSS>Z.md
-        assert!(n.contains("T") && n.ends_with("Z.md"), "archive name must carry UTC second-granularity stamp: {n}");
+        assert!(
+            n.contains("T") && n.ends_with("Z.md"),
+            "archive name must carry UTC second-granularity stamp: {n}"
+        );
     }
 }
 
@@ -230,7 +276,9 @@ fn brief_rejects_unsafe_worker_segment() {
     for w in ["../escape", "sub/dir", "/abs/path"] {
         let r = briefs::write_brief(&mut s, "probe", &json!({"worker":w,"brief":"body"}));
         match r {
-            HandlerResult::Err(msg) => assert!(!msg.is_empty(), "unsafe segment {w} must be refused"),
+            HandlerResult::Err(msg) => {
+                assert!(!msg.is_empty(), "unsafe segment {w} must be refused")
+            }
             HandlerResult::Ok(_) => panic!("unsafe segment {w} must be refused"),
         }
     }
@@ -242,12 +290,23 @@ fn warmstart_without_token_refused_file_unchanged() {
     let dir = tmp_root("warm-notoken");
     let mut s = seeded(&dir);
     let before = std::fs::read(dir.join("signoff.md")).unwrap();
-    let r = warmstart::write_warm_start(&mut s, "probe", &json!({"content":"new warm","orchestrator_token":"bogus"}));
+    let r = warmstart::write_warm_start(
+        &mut s,
+        "probe",
+        &json!({"content":"new warm","orchestrator_token":"bogus"}),
+    );
     match r {
-        HandlerResult::Err(msg) => assert!(msg.contains("claim") || msg.contains("token"), "refusal must name the claim: {msg}"),
+        HandlerResult::Err(msg) => assert!(
+            msg.contains("claim") || msg.contains("token"),
+            "refusal must name the claim: {msg}"
+        ),
         HandlerResult::Ok(_) => panic!("must refuse without a valid token"),
     }
-    assert_eq!(std::fs::read(dir.join("signoff.md")).unwrap(), before, "signoff.md byte-identical");
+    assert_eq!(
+        std::fs::read(dir.join("signoff.md")).unwrap(),
+        before,
+        "signoff.md byte-identical"
+    );
 }
 
 #[test]
@@ -258,15 +317,32 @@ fn warmstart_with_token_rewrites_block_and_preserves_workers_verbatim() {
         HandlerResult::Ok(v) => v["token"].as_str().unwrap().to_string(),
         HandlerResult::Err(e) => panic!("claim must succeed: {e}"),
     };
-    let content = "Last updated: 2026-09-13\n\n## If you read nothing else\n1. **New item** — fresh prose\n";
-    match warmstart::write_warm_start(&mut s, "probe", &json!({"content": content, "orchestrator_token": tok})) {
+    let content =
+        "Last updated: 2026-09-13\n\n## If you read nothing else\n1. **New item** — fresh prose\n";
+    match warmstart::write_warm_start(
+        &mut s,
+        "probe",
+        &json!({"content": content, "orchestrator_token": tok}),
+    ) {
         HandlerResult::Err(e) => panic!("warm-start write must succeed: {e}"),
         HandlerResult::Ok(_) => {}
     }
     let text = std::fs::read_to_string(dir.join("signoff.md")).unwrap();
-    assert!(text.contains("## If you read nothing else"), "warm-start block present");
-    assert!(text.contains("1. **New item** — fresh prose"), "new block landed");
-    assert!(text.contains("Worker signoff (alpha) | done: yes"), "worker bytes preserved verbatim");
-    assert!(text.contains("superseded block prose three"), "superseded block moved to History");
+    assert!(
+        text.contains("## If you read nothing else"),
+        "warm-start block present"
+    );
+    assert!(
+        text.contains("1. **New item** — fresh prose"),
+        "new block landed"
+    );
+    assert!(
+        text.contains("Worker signoff (alpha) | done: yes"),
+        "worker bytes preserved verbatim"
+    );
+    assert!(
+        text.contains("superseded block prose three"),
+        "superseded block moved to History"
+    );
     assert!(text.contains("## History"), "History section present");
 }
