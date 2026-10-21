@@ -14,6 +14,13 @@
 //! - A serialized entry (incl. server stamps) > 16384 bytes is refused with
 //!   zero bytes written; the cap clears the measured longest real entry
 //!   (4919 B at signoff.md:356, measured 2026-09-13).
+//! - A free-text value containing the field separator (`|`, with or
+//!   without a space) directly followed by a reserved field name
+//!   (`done:`, `unpushed:`, `awaits human:`, `still running:`,
+//!   `workflow:`, `ts:`, `session:`, `kaibo review:`) is refused with
+//!   zero bytes written: appended verbatim, it would forge that field of
+//!   the one-line entry for a reader that parses by field name (e.g. the
+//!   done-claim check).
 //! - The append runs under an exclusive `O_CREAT|O_EXCL` lock file in
 //!   `.locks/` (spec §2 concurrency model): bounded-retry acquire; a stale
 //!   lock (holder silent for `STALE_AFTER`) is detected by age and taken
@@ -233,9 +240,12 @@ fn serialize_line(
 }
 
 /// Schema validation (spec §3 `append_signoff` schema) plus the
-/// format invariants the schema cannot express: the entry is exactly ONE
-/// line, and `role` must keep the fixed token `Worker signoff (<role>)`
-/// well-formed (no parentheses, no line breaks, not empty).
+/// format invariants the schema cannot express: every field is part of
+/// exactly ONE line (no line breaks anywhere), no free-text field
+/// contains the field separator directly followed by a reserved field
+/// name (field forgery — [`forged_reserved_name`]), and `role` must keep
+/// the fixed token `Worker signoff (<role>)` well-formed (no
+/// parentheses, not empty).
 fn parse_args(
     args: &Value,
 ) -> Result<(String, String, String, String, String, String, Option<String>), String> {
@@ -294,6 +304,28 @@ fn parse_args(
             return Err(format!("append_signoff refused: '{field}' contains a newline — the entry is exactly ONE line"));
         }
     }
+    // Field forgery: a free-text value containing the on-disk separator
+    // (`|`, with or without a space) directly followed by a reserved
+    // field name forges that field for a reader that parses the line by
+    // name (e.g. the done-claim check): the appended line would carry an
+    // occurrence of a name the reader trusts. `done` is an enum (checked
+    // above) and cannot carry a separator, so only the six free-text
+    // fields are checked — each against every reserved name, its own
+    // included. Validation: zero bytes written, no lock.
+    for (field, value) in [
+        ("role", role.as_str()),
+        ("workflow", workflow.as_str()),
+        ("unpushed", unpushed.as_str()),
+        ("awaits_human", awaits_human.as_str()),
+        ("still_running", still_running.as_str()),
+        ("kaibo_review", kaibo_review.as_deref().unwrap_or("")),
+    ] {
+        if let Some(name) = forged_reserved_name(value) {
+            return Err(format!(
+                "append_signoff refused: '{field}' contains the field separator followed by '{name}' — that forges a field of the one-line entry"
+            ));
+        }
+    }
 
     Ok((
         role, workflow, done, unpushed, awaits_human, still_running, kaibo_review,
@@ -336,6 +368,50 @@ fn optional_string(obj: &Map<String, Value>, key: &str) -> Result<Option<String>
             value_kind(other)
         )),
     }
+}
+
+/// The reserved field names of the one-line entry: the names a reader
+/// keys on when parsing `signoff.md` (spec §3 "Serialized entry") — the
+/// four status fields plus the server stamps. `role` is NOT reserved: it
+/// appears inside the fixed token `Worker signoff (<role>)`, never as a
+/// `name: value` field.
+const RESERVED_FIELD_NAMES: [&str; 8] = [
+    "done:",
+    "unpushed:",
+    "awaits human:",
+    "still running:",
+    "workflow:",
+    "ts:",
+    "session:",
+    "kaibo review:",
+];
+
+/// The first reserved name a free-text value forges, if any: the on-disk
+/// field separator (`|`), with or without a single space, directly
+/// followed by a reserved name — `x | done: yes` would make the appended
+/// line carry an occurrence of `done:` the reader trusts. Legal and
+/// untouched: a pipe with no reserved name after it (`left | right`,
+/// `a|b`) and a reserved name with no separator before it (`see done: yes
+/// in the log`). A name never starts with a space, so stripping at most
+/// one leading space and checking the remainder covers both separator
+/// spellings; the byte scan allocates nothing.
+fn forged_reserved_name(value: &str) -> Option<&'static str> {
+    let bytes = value.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'|' {
+            continue;
+        }
+        // `|` is 0x7C (< 0x80), so a match means `i` is a char
+        // boundary; `i + 1` is one too.
+        let rest = &value[i + 1..];
+        let after = if rest.starts_with(' ') { &rest[1..] } else { rest };
+        for name in RESERVED_FIELD_NAMES {
+            if after.starts_with(name) {
+                return Some(name);
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
