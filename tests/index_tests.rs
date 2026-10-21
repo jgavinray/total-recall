@@ -32,12 +32,12 @@ use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use serde_json::{json, Value};
 use total_recall::config;
 use total_recall::rpc::{HandlerResult, Server};
 use total_recall::tools::index::{self, FORMAT_VERSION, INDEX_DIR, MANIFEST_NAME};
 use total_recall::tools::recall::recall;
 use total_recall::tools::ticks;
-use serde_json::{json, Value};
 
 /// The worker-signoff bucket, in the shipped line format.
 const SIGNOFF: &str = r#"# Signoff
@@ -53,14 +53,16 @@ Worker signoff (alpha) | done: yes | unpushed: none | awaits human: none | still
 "#;
 
 const DAY: &str = "# Day\n\nDecision: bring the Rust port up first (reference parity)\nParser edge BLOCKED: version mismatch in the fixture loader\n";
-const BRIEF: &str = "# Brief parser\n\nParser edge BLOCKED: version mismatch in the fixture loader\n";
+const BRIEF: &str =
+    "# Brief parser\n\nParser edge BLOCKED: version mismatch in the fixture loader\n";
 
 /// The only bucket paths that exist (spec §3's enum, §2's storage table).
 const BUCKETS: [&str; 3] = ["signoff.md", "2026-09-13.md", "briefs/parser.md"];
 
 /// Content planted OUTSIDE every bucket. It carries the search terms the
 /// confinement tests use, so a leak would be visible as an excerpt.
-const OUTSIDE: &str = "Parser edge BLOCKED and Decision: quilt-marker content from outside the buckets\n";
+const OUTSIDE: &str =
+    "Parser edge BLOCKED and Decision: quilt-marker content from outside the buckets\n";
 
 fn root_for(name: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!("total-recall-index-{name}-{}", std::process::id()));
@@ -211,7 +213,11 @@ fn t13_direct_edit_invalidates_the_index_and_the_report_follows_the_disk() {
     )
     .unwrap();
     let (mtime2, size2, _) = live_fingerprint(&dir, "2026-09-13.md");
-    assert_ne!((mtime, size), (mtime2, size2), "the edit moved the fingerprint");
+    assert_ne!(
+        (mtime, size),
+        (mtime2, size2),
+        "the edit moved the fingerprint"
+    );
 
     let after = search(&mut server, json!({"query": "never outrank the file"}));
     assert_eq!(after["count"], 1, "the new line is FOUND");
@@ -259,7 +265,10 @@ fn t14_corrupt_truncated_and_tampered_reports_are_never_served() {
         hits(&untampered),
         "a truncated cache costs no matches"
     );
-    assert!(report(&dir).is_some(), "and it was replaced, not left broken");
+    assert!(
+        report(&dir).is_some(),
+        "and it was replaced, not left broken"
+    );
 
     // (b) the strong tamper: entry lists emptied while the fingerprints
     // still claim the live files. A cache that could answer would report
@@ -416,10 +425,14 @@ fn t16_deleting_the_index_changes_nothing() {
     );
 
     // The same proof on a forced cold build, memo aside.
-    let cold = index::snapshot_with(&dir, false).expect("cold rebuild never fails on a readable root");
+    let cold =
+        index::snapshot_with(&dir, false).expect("cold rebuild never fails on a readable root");
     assert_eq!(cold.files.len(), 3, "one snapshot entry per bucket file");
     for rel in BUCKETS {
-        assert!(cold.files.contains_key(rel), "{rel} missing from the cold build");
+        assert!(
+            cold.files.contains_key(rel),
+            "{rel} missing from the cold build"
+        );
     }
 }
 
@@ -462,7 +475,10 @@ fn t17_crafted_escapes_are_refused_and_nothing_outside_is_read() {
             msg.starts_with("recall refused: scope must be one of dayfile|signoff|briefs|all"),
             "crafted scope {crafted:?} must be refused in the pinned style, got: {msg}"
         );
-        assert!(!msg.contains("quilt-marker"), "refusals quote no bucket content");
+        assert!(
+            !msg.contains("quilt-marker"),
+            "refusals quote no bucket content"
+        );
     }
 
     // The schema has no path parameter, so an escape attempt arrives as a
@@ -473,7 +489,9 @@ fn t17_crafted_escapes_are_refused_and_nothing_outside_is_read() {
         &json!({"query": "Decision", "path": "../../etc/passwd"}),
     ));
     assert!(
-        msg.contains("unknown field") && msg.contains("\"path\"") && msg.contains("query, scope, workflow, since"),
+        msg.contains("unknown field")
+            && msg.contains("\"path\"")
+            && msg.contains("query, scope, workflow, since"),
         "the refusal must name the field and the allowed set, got: {msg}"
     );
     let msg = refusal(recall(
@@ -506,7 +524,10 @@ fn t17_crafted_escapes_are_refused_and_nothing_outside_is_read() {
         "C:\\..\\windows",
     ] {
         let v = search(&mut server, json!({"query": query}));
-        assert_eq!(v["count"], 0, "path-shaped query {query:?} must match nothing");
+        assert_eq!(
+            v["count"], 0,
+            "path-shaped query {query:?} must match nothing"
+        );
     }
 
     // A regex that matches every line still reports only bucket paths.
@@ -537,8 +558,14 @@ fn t17_crafted_escapes_are_refused_and_nothing_outside_is_read() {
     std::os::unix::fs::symlink(&secret, dir.join("briefs/leak.md")).unwrap();
     let mut server = server_for(&dir);
     let v = search(&mut server, json!({"query": "quilt-marker"}));
-    assert_eq!(v["count"], 0, "the symlinked-out file is not a bucket entry");
-    let v = search(&mut server, json!({"query": "Parser edge", "scope": "briefs"}));
+    assert_eq!(
+        v["count"], 0,
+        "the symlinked-out file is not a bucket entry"
+    );
+    let v = search(
+        &mut server,
+        json!({"query": "Parser edge", "scope": "briefs"}),
+    );
     assert_eq!(v["count"], 1, "only the real brief");
     assert_eq!(v["results"][0]["path"], "briefs/parser.md");
 }
@@ -563,8 +590,14 @@ fn t17b_a_bucket_that_resolves_outside_the_root_is_a_loud_refusal() {
                 && msg.contains("outside the configured memory root"),
             "an escaping bucket must be refused LOUDLY and name the path, got: {msg}"
         );
-        assert!(msg.contains("briefs"), "the refusal names what escaped: {msg}");
-        assert!(!msg.contains("quilt-marker"), "no content leaks into a refusal");
+        assert!(
+            msg.contains("briefs"),
+            "the refusal names what escaped: {msg}"
+        );
+        assert!(
+            !msg.contains("quilt-marker"),
+            "no content leaks into a refusal"
+        );
     }
 }
 
@@ -610,9 +643,15 @@ fn scope_confinement_is_what_narrows_the_answer() {
 
     // `since` is a lower bound on the ts DATE, and the ts is the live
     // mtime — so a date past today bounds everything out.
-    let v = search(&mut server, json!({"query": "Parser edge", "since": "1999-01-01"}));
+    let v = search(
+        &mut server,
+        json!({"query": "Parser edge", "since": "1999-01-01"}),
+    );
     assert_eq!(v["count"], 2, "a bound in the past admits all of them");
-    let v = search(&mut server, json!({"query": "Parser edge", "since": "2999-01-01"}));
+    let v = search(
+        &mut server,
+        json!({"query": "Parser edge", "since": "2999-01-01"}),
+    );
     assert_eq!(v["count"], 0, "a bound past the live mtime excludes them");
 }
 
@@ -631,10 +670,7 @@ fn the_derived_report_describes_exactly_the_three_buckets() {
     assert!(manifest["built_at"].as_str().unwrap().ends_with('Z'));
     let files = manifest["files"].as_array().unwrap();
     assert_eq!(files.len(), 3, "one entry per bucket file, nothing else");
-    let mut seen: Vec<&str> = files
-        .iter()
-        .map(|e| e["path"].as_str().unwrap())
-        .collect();
+    let mut seen: Vec<&str> = files.iter().map(|e| e["path"].as_str().unwrap()).collect();
     seen.sort_unstable();
     let mut expected = BUCKETS.to_vec();
     expected.sort_unstable();
@@ -711,7 +747,10 @@ fn the_std_regex_engine_covers_the_pinned_search_modes() {
     assert!(!find("(parity", "plain text with no parenthesis"));
 
     // Regex mode: the pinned `re:` prefix, case-insensitive.
-    assert!(find("re:Parser edge (BLOCK|BLOCKED)", "parser edge blocked: yes"));
+    assert!(find(
+        "re:Parser edge (BLOCK|BLOCKED)",
+        "parser edge blocked: yes"
+    ));
     // The shipped signoff line has a space after the colon, so a real
     // worker-search query says so — and adjacency means what it says.
     assert!(find("re:done:\\s?(yes|no)", "| done: no | unpushed"));
@@ -719,14 +758,20 @@ fn the_std_regex_engine_covers_the_pinned_search_modes() {
         !find("re:done:(yes|no)", "| done: no | unpushed"),
         "a space sits between the colon and the value"
     );
-    assert!(find("re:done:(yes|no)", "| done:yes |"), "adjacent is adjacent");
+    assert!(
+        find("re:done:(yes|no)", "| done:yes |"),
+        "adjacent is adjacent"
+    );
     assert!(
         !find("re:done:\\s?(yes|no)", "| done: maybe | unpushed"),
         "neither alternative is `maybe`"
     );
     assert!(find("re:^# Brief parser$", "# Brief parser"));
     assert!(!find("re:^Brief parser$", "# Brief parser"));
-    assert!(find("re:[0-9]{4}-[0-9]{2}-[0-9]{2}", "ts: 2026-09-12T23:41:07Z"));
+    assert!(find(
+        "re:[0-9]{4}-[0-9]{2}-[0-9]{2}",
+        "ts: 2026-09-12T23:41:07Z"
+    ));
     assert!(!find("re:[0-9]{5}", "only four digits: 1234"));
     assert!(find("re:w[ao]rk", "work and woik both count"));
     assert!(find("re:\\d\\d-", "stamped 26-09-12"));
@@ -763,9 +808,9 @@ fn the_std_regex_engine_covers_the_pinned_search_modes() {
         "re:\\q",
         "re:^*anchor",
     ] {
-        let err = index::Query::compile(broken)
-            .err()
-            .unwrap_or_else(|| panic!("{broken:?} must be refused, not compiled into a silent search"));
+        let err = index::Query::compile(broken).err().unwrap_or_else(|| {
+            panic!("{broken:?} must be refused, not compiled into a silent search")
+        });
         assert!(
             !err.is_empty(),
             "the refusal for {broken:?} must explain itself: {err}"
@@ -785,10 +830,15 @@ fn the_std_regex_engine_covers_the_pinned_search_modes() {
 /// every other unsupported pattern.
 #[test]
 fn a_counted_repetition_over_the_rep_cap_is_refused_not_clamped() {
-    for broken in ["re:a{300}", "re:a{300,}", "re:a{2,300}", "re:(ab){1000,2000}"] {
-        let err = index::Query::compile(broken)
-            .err()
-            .unwrap_or_else(|| panic!("{broken:?} must be refused, not clamped into a silent answer"));
+    for broken in [
+        "re:a{300}",
+        "re:a{300,}",
+        "re:a{2,300}",
+        "re:(ab){1000,2000}",
+    ] {
+        let err = index::Query::compile(broken).err().unwrap_or_else(|| {
+            panic!("{broken:?} must be refused, not clamped into a silent answer")
+        });
         assert!(
             err.starts_with("regex is malformed at position"),
             "the refusal speaks the engine's own voice: {err}"
@@ -814,14 +864,26 @@ fn a_counted_repetition_over_the_rep_cap_is_refused_not_clamped() {
             .and_then(|q| q.matches(line))
             .unwrap_or_else(|err| panic!("{pattern:?} at the cap must compile and answer: {err}"))
     };
-    assert!(matched("re:a{256}", &"a".repeat(256)), "256 reps over 256 chars");
-    assert!(matched("re:a{256}", &"a".repeat(300)), "256 reps inside 300 chars");
+    assert!(
+        matched("re:a{256}", &"a".repeat(256)),
+        "256 reps over 256 chars"
+    );
+    assert!(
+        matched("re:a{256}", &"a".repeat(300)),
+        "256 reps inside 300 chars"
+    );
     assert!(
         !matched("re:a{256}", &"a".repeat(255)),
         "256 reps need 256 characters — the cap honours the pattern, it never stretches it"
     );
-    assert!(matched("re:a{254,256}", &"a".repeat(256)), "an over-cap-free range still works");
-    assert!(matched("re:a+", &"a".repeat(400)), "the UNBOUNDED case keeps its REP_CAP budget");
+    assert!(
+        matched("re:a{254,256}", &"a".repeat(256)),
+        "an over-cap-free range still works"
+    );
+    assert!(
+        matched("re:a+", &"a".repeat(400)),
+        "the UNBOUNDED case keeps its REP_CAP budget"
+    );
 }
 
 #[test]
@@ -848,5 +910,8 @@ fn a_regex_the_engine_cannot_finish_is_refused_not_answered() {
     .unwrap();
     let mut server = server_for(&dir);
     let msg = refusal(recall(&mut server, "probe", &json!({"query": "re:(a*)*b"})));
-    assert!(msg.contains("budget"), "recall must forward the refusal: {msg}");
+    assert!(
+        msg.contains("budget"),
+        "recall must forward the refusal: {msg}"
+    );
 }

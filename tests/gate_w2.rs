@@ -17,15 +17,18 @@
 //!   under an `O_CREAT|O_EXCL` lock file in `.locks/`; >16384 B refused with ZERO bytes written.
 //! - Two racing appends (one process) and two server processes on one root both serialize.
 
+use serde_json::json;
+use std::path::{Path, PathBuf};
 use total_recall::config;
 use total_recall::gate;
 use total_recall::rpc::{HandlerResult, Server};
 use total_recall::tools::{signoff_append, signoff_read};
-use serde_json::json;
-use std::path::PathBuf;
 
 fn tmp_root(name: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("total-recall-gate-w2-{name}-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!(
+        "total-recall-gate-w2-{name}-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -47,7 +50,7 @@ Worker signoff (alpha) | done: yes | unpushed: none | awaits human: none | still
 - 2026-09-12 — superseded block prose three
 "#;
 
-fn seed(root: &PathBuf) {
+fn seed(root: &Path) {
     std::fs::write(root.join("signoff.md"), SEED).unwrap();
 }
 
@@ -62,7 +65,10 @@ fn read_signoff_parses_warm_start_ranked_history_and_workers() {
         HandlerResult::Ok(v) => v,
         HandlerResult::Err(e) => panic!("read_signoff must succeed on a seeded fixture: {e}"),
     };
-    assert!(v["warm_start"]["header"].as_str().unwrap().contains("Last updated:"));
+    assert!(v["warm_start"]["header"]
+        .as_str()
+        .unwrap()
+        .contains("Last updated:"));
     let ranked = v["warm_start"]["ranked"].as_array().unwrap();
     assert_eq!(ranked.len(), 2);
     assert_eq!(ranked[0]["rank"], 1);
@@ -70,7 +76,9 @@ fn read_signoff_parses_warm_start_ranked_history_and_workers() {
     assert!(ranked[1]["text"].as_str().unwrap().contains("Second item"));
     let history = v["warm_start"]["history"].as_array().unwrap();
     assert!(!history.is_empty());
-    assert!(history.iter().any(|h| h.as_str().unwrap().contains("superseded")));
+    assert!(history
+        .iter()
+        .any(|h| h.as_str().unwrap().contains("superseded")));
     let ws = v["worker_signoffs"].as_array().unwrap();
     assert_eq!(ws.len(), 1);
     assert_eq!(ws[0]["worker"], "alpha");
@@ -83,14 +91,28 @@ fn handshake_marks_session_and_persists_id() {
     config::init_state(&dir).unwrap();
     seed(&dir);
     let mut s = Server::new_server(&dir);
-    assert!(!gate::gate(&mut s, "probe").is_ok(), "gate must refuse before handshake");
+    assert!(
+        gate::gate(&mut s, "probe").is_err(),
+        "gate must refuse before handshake"
+    );
     let _ = signoff_read::read_signoff(&mut s, "probe");
-    assert!(gate::gate(&mut s, "probe").is_ok(), "gate must pass after handshake");
+    assert!(
+        gate::gate(&mut s, "probe").is_ok(),
+        "gate must pass after handshake"
+    );
     let sess = dir.join(".state/sessions.json");
-    assert!(sess.exists(), ".state/sessions.json must persist the session id");
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&sess).unwrap()).unwrap();
+    assert!(
+        sess.exists(),
+        ".state/sessions.json must persist the session id"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sess).unwrap()).unwrap();
     assert!(v.is_array());
-    assert!(v.as_array().unwrap().iter().any(|e| e["session_id"] == "probe"));
+    assert!(v
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["session_id"] == "probe"));
 }
 
 #[test]
@@ -115,7 +137,10 @@ fn append_before_handshake_is_refused_and_writes_nothing() {
         "side effect ABSENT: file byte-identical"
     );
     let audit = dir.join(".audit");
-    assert!(!audit.exists(), "no audit log should exist before handshake");
+    assert!(
+        !audit.exists(),
+        "no audit log should exist before handshake"
+    );
 }
 
 #[test]
@@ -146,8 +171,19 @@ fn append_after_handshake_emits_legacy_line_with_stamps() {
     assert!(line.contains("| still running: no"));
     assert!(line.contains("| kaibo review: n/a (no code changes)"));
     assert!(line.contains("| workflow: memory-kernel"));
-    let ts = line.split("| ts: ").nth(1).unwrap().split(" | session: ").next().unwrap().trim().to_string();
-    assert!(ts.ends_with('Z') && ts.len() >= 20, "server-stamped ts must be ISO-8601Z: {ts}");
+    let ts = line
+        .split("| ts: ")
+        .nth(1)
+        .unwrap()
+        .split(" | session: ")
+        .next()
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(
+        ts.ends_with('Z') && ts.len() >= 20,
+        "server-stamped ts must be ISO-8601Z: {ts}"
+    );
     assert!(line.contains("| session: "));
     // pre-existing bytes preserved verbatim
     assert!(text.contains("Worker signoff (alpha) | done: yes"));
@@ -170,7 +206,10 @@ fn append_cap_15000_passes_and_20000_refused_zero_bytes() {
     let args2 = json!({"role":"probe","workflow":"memory-kernel","done":"yes","unpushed":big20000,"awaits_human":"none","still_running":"no"});
     let before = std::fs::read(dir.join("signoff.md")).unwrap().len();
     match signoff_append::append_signoff(&mut s, "probe", &args2) {
-        HandlerResult::Err(msg) => assert!(msg.contains("16384") || msg.contains("16384-byte"), "cap refusal must name the limit: {msg}"),
+        HandlerResult::Err(msg) => assert!(
+            msg.contains("16384") || msg.contains("16384-byte"),
+            "cap refusal must name the limit: {msg}"
+        ),
         HandlerResult::Ok(_) => panic!("20000-byte entry must be REFUSED"),
     }
     assert_eq!(
@@ -236,7 +275,9 @@ fn racing_appends_serialize_no_interleave() {
     }
     assert_eq!(ok, 10, "all 10 entries intact, no interleave");
     assert_eq!(
-        text.lines().filter(|l| l.starts_with("Worker signoff (probe")).count(),
+        text.lines()
+            .filter(|l| l.starts_with("Worker signoff (probe"))
+            .count(),
         10
     );
 }
@@ -247,13 +288,13 @@ fn two_server_processes_on_one_root_serialize() {
     config::init_state(&dir).unwrap();
     seed(&dir);
     let bin = env!("CARGO_BIN_EXE_total-recall");
-    let frames_a = format!(
-        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"2026-07-28\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"a\",\"version\":\"0\"}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"read_signoff\",\"arguments\":{{}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"append_signoff\",\"arguments\":{{\"role\":\"procA\",\"workflow\":\"wf-a\",\"done\":\"yes\",\"unpushed\":\"none\",\"awaits_human\":\"none\",\"still_running\":\"no\"}}}}}}\n"
-    );
-    let frames_b = frames_a.replace("\"procA\"", "\"procB\"").replace("wf-a", "wf-b");
+    let frames_a = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2026-07-28\",\"capabilities\":{},\"clientInfo\":{\"name\":\"a\",\"version\":\"0\"}}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"read_signoff\",\"arguments\":{}}}\n{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"append_signoff\",\"arguments\":{\"role\":\"procA\",\"workflow\":\"wf-a\",\"done\":\"yes\",\"unpushed\":\"none\",\"awaits_human\":\"none\",\"still_running\":\"no\"}}}\n".to_string();
+    let frames_b = frames_a
+        .replace("\"procA\"", "\"procB\"")
+        .replace("wf-a", "wf-b");
     let mut children = Vec::new();
     for (frames, tag) in [(frames_a.clone(), "a"), (frames_b.clone(), "b")] {
-        let mut c = std::process::Command::new(&bin)
+        let mut c = std::process::Command::new(bin)
             .arg("--root")
             .arg(dir.display().to_string())
             .stdin(std::process::Stdio::piped())
@@ -274,5 +315,8 @@ fn two_server_processes_on_one_root_serialize() {
     let text = std::fs::read_to_string(dir.join("signoff.md")).unwrap();
     assert!(text.contains("Worker signoff (procA) | done: yes | unpushed: none | awaits human: none | still running: no | workflow: wf-a"));
     assert!(text.contains("Worker signoff (procB) | done: yes | unpushed: none | awaits human: none | still running: no | workflow: wf-b"));
-    assert!(text.contains("Worker signoff (alpha) | done: yes"), "pre-existing bytes intact");
+    assert!(
+        text.contains("Worker signoff (alpha) | done: yes"),
+        "pre-existing bytes intact"
+    );
 }

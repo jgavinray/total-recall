@@ -35,9 +35,9 @@
 //! This file compiles against the `total-recall` lib (wave 2: all
 //! modules landed).
 
-use total_recall::rpc::{self, Server};
 use serde_json::{json, Value};
 use std::io::Write;
+use total_recall::rpc::{self, Server};
 
 fn rpc_root(name: &str) -> std::path::PathBuf {
     let p = std::env::temp_dir().join(format!("total-recall-rpc-{name}-{}", std::process::id()));
@@ -80,8 +80,11 @@ fn initialize_unknown_or_missing_revision_falls_back_to_current() {
         v["result"]["protocolVersion"], "2026-07-28",
         "a revision the server does not implement must be answered with the current one"
     );
-    let out = rpc::handle_frame(&mut s, r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}"#)
-        .unwrap();
+    let out = rpc::handle_frame(
+        &mut s,
+        r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}"#,
+    )
+    .unwrap();
     let v: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(
         v["result"]["protocolVersion"], "2026-07-28",
@@ -102,7 +105,10 @@ fn tools_call_with_no_name_is_32602() {
     .unwrap_err();
     let v: Value = serde_json::from_str(&err).unwrap();
     assert_eq!(v["error"]["code"], -32602);
-    assert!(v["error"]["message"].as_str().unwrap().contains("unknown tool name"));
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("unknown tool name"));
     assert_eq!(v["id"], 7);
 }
 
@@ -120,7 +126,10 @@ fn structurally_invalid_frame_is_32600_not_32700() {
     let err = rpc::handle_frame(&mut s, r#"{"jsonrpc":"2.0","id":5}"#).unwrap_err();
     let v: Value = serde_json::from_str(&err).unwrap();
     assert_eq!(v["error"]["code"], -32600);
-    assert_eq!(v["id"], 5, "a recoverable id must be preserved in the error frame");
+    assert_eq!(
+        v["id"], 5,
+        "a recoverable id must be preserved in the error frame"
+    );
 }
 
 #[test]
@@ -140,7 +149,10 @@ fn notifications_emit_nothing_even_when_unimplemented() {
         r#"{"jsonrpc":"2.0","method":"resources/subscribe","params":{}}"#,
     )
     .unwrap();
-    assert!(out.is_empty(), "an unimplemented-method notification must still be silent");
+    assert!(
+        out.is_empty(),
+        "an unimplemented-method notification must still be silent"
+    );
 }
 
 #[test]
@@ -223,7 +235,10 @@ fn gate_opens_when_handshaken_and_counter_stays_put() {
         .expect("the text item is the serialized handler result");
     assert_eq!(payload["appended"], true, "the wave-2 success shape");
     assert!(
-        payload["entry"].as_str().unwrap().contains("Worker signoff (probe)"),
+        payload["entry"]
+            .as_str()
+            .unwrap()
+            .contains("Worker signoff (probe)"),
         "the echoed entry carries the fixed token"
     );
     // The append really happened on disk, stamped with the process-local
@@ -242,7 +257,8 @@ fn gate_opens_when_handshaken_and_counter_stays_put() {
     );
     assert!(last.contains(&format!("| session: {}", s.session_id)));
     assert!(
-        !s.attempted_write_before_handshake.contains_key(&s.session_id),
+        !s.attempted_write_before_handshake
+            .contains_key(&s.session_id),
         "a post-handshake call is not a pre-handshake attempt"
     );
 }
@@ -255,7 +271,10 @@ fn gate_refusals_are_counted_per_session() {
     let mut s = fresh_server("gate-count");
     let frame = r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"append_signoff","arguments":{"role":"probe","workflow":"w","done":"yes"}}}"#;
     let _ = rpc::handle_frame(&mut s, frame).unwrap();
-    assert_eq!(s.attempted_write_before_handshake.get(&s.session_id), Some(&1));
+    assert_eq!(
+        s.attempted_write_before_handshake.get(&s.session_id),
+        Some(&1)
+    );
     let _ = rpc::handle_frame(&mut s, frame).unwrap();
     assert_eq!(
         s.attempted_write_before_handshake.get(&s.session_id),
@@ -272,10 +291,12 @@ fn tools_list_registry_carries_the_full_ten_tool_set() {
     // builder (contract module API) is exercised here while the rest of
     // this file uses Server::new_server.
     let mut s = rpc::new_server(&rpc_root("tools-list"));
-    let out = rpc::handle_frame(&mut s, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
-        .unwrap();
+    let out =
+        rpc::handle_frame(&mut s, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap();
     let v: Value = serde_json::from_str(&out).unwrap();
-    let tools = v["result"]["tools"].as_array().expect("tools must be an array");
+    let tools = v["result"]["tools"]
+        .as_array()
+        .expect("tools must be an array");
     let mut names: Vec<&str> = tools
         .iter()
         .map(|tool| tool["name"].as_str().expect("every tool is named"))
@@ -309,7 +330,10 @@ fn tools_list_registry_carries_the_full_ten_tool_set() {
     let read = &tools[0]["inputSchema"];
     assert_eq!(read["type"], "object");
     assert!(
-        read["properties"].as_object().map(|p| p.is_empty()).unwrap_or(false),
+        read["properties"]
+            .as_object()
+            .map(|p| p.is_empty())
+            .unwrap_or(false),
         "read_signoff's schema carries no properties"
     );
     assert_eq!(read["additionalProperties"], false);
@@ -372,8 +396,16 @@ fn serve_stdio_emits_frames_keeps_notifications_silent_and_exits_zero() {
     );
     let init: Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(init["result"]["protocolVersion"], "2026-07-28");
-    assert!(lines[1].contains("-32601"), "unknown method frame: {}", lines[1]);
-    assert!(lines[2].contains("-32700"), "parse-error frame: {}", lines[2]);
+    assert!(
+        lines[1].contains("-32601"),
+        "unknown method frame: {}",
+        lines[1]
+    );
+    assert!(
+        lines[2].contains("-32700"),
+        "parse-error frame: {}",
+        lines[2]
+    );
 }
 
 #[test]
@@ -482,7 +514,10 @@ fn claim_orchestrator_success_arrives_as_one_serialized_text_item() {
     )
     .unwrap();
     let v: Value = serde_json::from_str(&out).unwrap();
-    assert!(v["result"]["isError"].is_null(), "success carries no isError");
+    assert!(
+        v["result"]["isError"].is_null(),
+        "success carries no isError"
+    );
     let content = v["result"]["content"]
         .as_array()
         .expect("success carries a content array");

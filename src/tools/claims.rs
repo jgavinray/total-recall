@@ -55,8 +55,8 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::Path;
 use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -109,10 +109,7 @@ pub fn tools() -> Vec<Tool> {
 /// can drive named sessions.
 pub fn handlers() -> HashMap<String, Handler> {
     let mut handlers: HashMap<String, Handler> = HashMap::new();
-    handlers.insert(
-        "claim_orchestrator".to_string(),
-        claim_orchestrator_handler,
-    );
+    handlers.insert("claim_orchestrator".to_string(), claim_orchestrator_handler);
     handlers.insert("write_dayfile".to_string(), write_dayfile_handler);
     handlers
 }
@@ -203,7 +200,8 @@ fn now_epoch() -> Result<u64, String> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .map_err(|_| {
-            "the system clock is before the Unix epoch — refusing to stamp (refuse loudly)".to_string()
+            "the system clock is before the Unix epoch — refusing to stamp (refuse loudly)"
+                .to_string()
         })
 }
 
@@ -242,8 +240,13 @@ fn days_in_month(year: u32, month: u32) -> u32 {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
         2 => {
-            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-            if leap { 29 } else { 28 }
+            let leap =
+                (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
+            if leap {
+                29
+            } else {
+                28
+            }
         }
         _ => 0,
     }
@@ -292,7 +295,10 @@ pub fn claim_orchestrator(server: &mut Server, session: &str, args: &Value) -> H
         }
     };
     let allowed = ["date"];
-    let unknown: Vec<&String> = obj.keys().filter(|k| !allowed.contains(&k.as_str())).collect();
+    let unknown: Vec<&String> = obj
+        .keys()
+        .filter(|k| !allowed.contains(&k.as_str()))
+        .collect();
     if !unknown.is_empty() {
         return HandlerResult::Err(format!(
             "claim_orchestrator refused: unknown field(s) {:?} — the schema allows only: date",
@@ -548,7 +554,10 @@ fn read_claim(path: &Path) -> ClaimRead {
         .get("holder_session_id")
         .and_then(|x| x.as_str())
         .map(|s| s.to_string());
-    let token = v.get("token").and_then(|x| x.as_str()).map(|s| s.to_string());
+    let token = v
+        .get("token")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string());
     let acquired_at = v
         .get("acquired_at")
         .and_then(|x| x.as_str())
@@ -584,12 +593,7 @@ fn claim_age(path: &Path) -> Option<Duration> {
 /// token is returned (idempotency under a race), otherwise the
 /// refusal names the winner. A failed publish undoes the bare create
 /// so no half-owned file is left behind.
-fn create_fresh_claim(
-    claims_dir: &Path,
-    path: &Path,
-    session: &str,
-    date: &str,
-) -> HandlerResult {
+fn create_fresh_claim(claims_dir: &Path, path: &Path, session: &str, date: &str) -> HandlerResult {
     if let Err(e) = std::fs::create_dir_all(claims_dir) {
         return HandlerResult::Err(format!(
             "claim_orchestrator refused: cannot create .claims/: {e}"
@@ -604,11 +608,14 @@ fn create_fresh_claim(
     // single-writer gate, cheap to mint.
     let token = format!(
         "tok-{:016x}",
-        ((std::process::id() as u64).wrapping_mul(0x9E37_79B9) ^ epoch)
-            .wrapping_mul(nonce + 1)
+        ((std::process::id() as u64).wrapping_mul(0x9E37_79B9) ^ epoch).wrapping_mul(nonce + 1)
     );
     let acquired_at = gate::utc_iso8601(epoch as i64);
-    match std::fs::OpenOptions::new().create_new(true).write(true).open(path) {
+    match std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+    {
         Ok(mut f) => {
             let doc = json!({
                 "holder_session_id": session,
@@ -704,7 +711,7 @@ fn rotate_stale_claims(root: &Path, today: &str) {
             eprintln!("[total-recall] claim_orchestrator: .claims/archive/{name} already exists — the stale claim is left in place (archives are never overwritten)");
             continue;
         }
-        if let Err(e) = std::fs::rename(&entry.path(), &target) {
+        if let Err(e) = std::fs::rename(entry.path(), &target) {
             eprintln!("[total-recall] claim_orchestrator: could not rotate stale claim .claims/{name} to the archive: {e} — left in place");
         }
     }
@@ -743,11 +750,16 @@ pub fn write_dayfile(server: &mut Server, session: &str, args: &Value) -> Handle
     let obj = match args.as_object() {
         Some(obj) => obj,
         None => {
-            return HandlerResult::Err("write_dayfile refused: arguments must be a JSON object".to_string())
+            return HandlerResult::Err(
+                "write_dayfile refused: arguments must be a JSON object".to_string(),
+            )
         }
     };
     let allowed = ["content", "orchestrator_token"];
-    let unknown: Vec<&String> = obj.keys().filter(|k| !allowed.contains(&k.as_str())).collect();
+    let unknown: Vec<&String> = obj
+        .keys()
+        .filter(|k| !allowed.contains(&k.as_str()))
+        .collect();
     if !unknown.is_empty() {
         return HandlerResult::Err(format!(
             "write_dayfile refused: unknown field(s) {:?} — the schema allows only: content, orchestrator_token",
@@ -844,12 +856,14 @@ fn replace_dayfile_under_lock(
 /// previous bytes in place; the tmp file is removed on every failure
 /// path. The tmp name carries this acquisition's nonce, so it is
 /// unique per process.
-fn write_dayfile_under_lock(root: &Path, date: &str, content: &str, nonce: u64) -> Result<(), String> {
+fn write_dayfile_under_lock(
+    root: &Path,
+    date: &str,
+    content: &str,
+    nonce: u64,
+) -> Result<(), String> {
     let path = root.join(format!("{date}.md"));
-    let tmp = root.join(format!(
-        ".{date}.md.tmp-{}-{nonce}",
-        std::process::id()
-    ));
+    let tmp = root.join(format!(".{date}.md.tmp-{}-{nonce}", std::process::id()));
     if let Err(err) = std::fs::write(&tmp, content.as_bytes()) {
         let _ = std::fs::remove_file(&tmp);
         return Err(format!(
@@ -904,19 +918,14 @@ fn lock_contents(token: &LockToken) -> String {
 fn acquire_lock(root: &Path, session: &str, lock_name: &str) -> Result<LockToken, String> {
     let locks_dir = root.join(".locks");
     if let Err(e) = std::fs::create_dir_all(&locks_dir) {
-        return Err(format!(
-            "write_dayfile refused: cannot create .locks/: {e}"
-        ));
+        return Err(format!("write_dayfile refused: cannot create .locks/: {e}"));
     }
     let path = locks_dir.join(lock_name);
     let pid = std::process::id();
     let mut attempts = 0u32;
     loop {
         attempts += 1;
-        let epoch = match now_epoch() {
-            Ok(epoch) => epoch,
-            Err(msg) => return Err(msg),
-        };
+        let epoch = now_epoch()?;
         let nonce = ACQUIRE_NONCE.fetch_add(1, Ordering::Relaxed);
         let token = LockToken {
             pid,
@@ -924,7 +933,11 @@ fn acquire_lock(root: &Path, session: &str, lock_name: &str) -> Result<LockToken
             nonce,
             epoch,
         };
-        match std::fs::OpenOptions::new().create_new(true).write(true).open(&path) {
+        match std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+        {
             Ok(mut f) => {
                 let res = f.write_all(lock_contents(&token).as_bytes());
                 let flush = f.flush();
@@ -990,7 +1003,9 @@ fn acquire_lock(root: &Path, session: &str, lock_name: &str) -> Result<LockToken
 fn lock_age(path: &Path) -> Option<Duration> {
     let now = SystemTime::now();
     let content = std::fs::read_to_string(path).ok()?;
-    let since = if let Some(holder_epoch) = parse_lock_field(&content, "epoch").and_then(|e| e.parse::<u64>().ok()) {
+    let since = if let Some(holder_epoch) =
+        parse_lock_field(&content, "epoch").and_then(|e| e.parse::<u64>().ok())
+    {
         UNIX_EPOCH + Duration::from_secs(holder_epoch)
     } else {
         // The epoch field is missing/unreadable: fall back to the
@@ -1074,8 +1089,7 @@ fn remove_stale_lock(path: &Path, stale: &StaleLock) -> bool {
         Ok(meta) => meta,
         Err(_) => return false,
     };
-    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime
-    {
+    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime {
         return false;
     }
     std::fs::remove_file(path).is_ok()
@@ -1117,7 +1131,11 @@ fn release_lock(root: &Path, token: &LockToken, lock_name: &str) {
         ("epoch", token.epoch.to_string()),
     ]
     .iter()
-    .all(|(name, want)| parse_lock_field(&content, name).map(|got| got == want).unwrap_or(false));
+    .all(|(name, want)| {
+        parse_lock_field(&content, name)
+            .map(|got| got == want)
+            .unwrap_or(false)
+    });
     if !ours {
         eprintln!(
             "[total-recall] write_dayfile: .locks/{lock_name} no longer records this acquisition — not removed (a successor's lock)"
@@ -1135,7 +1153,9 @@ fn release_lock(root: &Path, token: &LockToken, lock_name: &str) {
 fn require_string(obj: &Map<String, Value>, key: &str) -> Result<String, String> {
     match obj.get(key) {
         Some(Value::String(s)) => Ok(s.clone()),
-        None => Err(format!("write_dayfile refused: missing required field '{key}'")),
+        None => Err(format!(
+            "write_dayfile refused: missing required field '{key}'"
+        )),
         Some(other) => Err(format!(
             "write_dayfile refused: field '{key}' must be a string (got {})",
             value_kind(other)

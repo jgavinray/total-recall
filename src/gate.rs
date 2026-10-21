@@ -44,7 +44,6 @@ use serde_json::{json, Value};
 
 use crate::rpc::Server;
 
-
 /// The full refusal message a gated tool reports: the pinned text,
 /// restating the rule at the failure moment (spec §4), plus the
 /// FOUND-1 cold-start clause — when `read_signoff` itself reports the
@@ -119,7 +118,8 @@ fn persist_session_record(root: &Path, session: &str) -> Result<(), String> {
             let value: Value = serde_json::from_str(&text)
                 .map_err(|err| format!("parse .state/sessions.json: {err}"))?;
             value.as_array().cloned().ok_or_else(|| {
-                "refusing to append to a malformed .state/sessions.json (not a JSON array)".to_string()
+                "refusing to append to a malformed .state/sessions.json (not a JSON array)"
+                    .to_string()
             })?
         }
         Err(_) => Vec::new(), // absent: the first record on this root

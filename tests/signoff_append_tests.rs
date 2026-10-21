@@ -13,9 +13,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use serde_json::json;
 use total_recall::rpc::{HandlerResult, Server};
 use total_recall::tools::signoff_append;
-use serde_json::json;
 
 /// The on-disk format is a shipped reference (the real `~/dev/exomemory/
 /// signoff.md`); fixture mirrors its layout.
@@ -128,8 +128,14 @@ fn append_before_handshake_refused_with_zero_side_effects() {
         before,
         "a refused append writes nothing"
     );
-    assert!(!dir.join(".locks").exists(), "no lock file is created for a refused call");
-    assert!(!dir.join(".audit").exists(), "no audit trail for a refused call");
+    assert!(
+        !dir.join(".locks").exists(),
+        "no lock file is created for a refused call"
+    );
+    assert!(
+        !dir.join(".audit").exists(),
+        "no audit trail for a refused call"
+    );
 }
 
 #[test]
@@ -145,7 +151,10 @@ fn append_after_handshake_emits_the_pinned_one_line() {
     let text = std::fs::read_to_string(dir.join("signoff.md")).unwrap();
     // Pre-existing bytes preserved verbatim: the seeded file is a byte
     // prefix of the result; the entry is appended after it.
-    assert!(text.starts_with(SEED), "pre-existing bytes are a verbatim prefix");
+    assert!(
+        text.starts_with(SEED),
+        "pre-existing bytes are a verbatim prefix"
+    );
     // EXACTLY one new line, in the pinned field order:
     // token, the four status fields, kaibo review, then the server stamps.
     let line = text
@@ -162,7 +171,10 @@ fn append_after_handshake_emits_the_pinned_one_line() {
         "Worker signoff (probe) | done: yes | unpushed: n/a (no repo writes) | awaits human: none | still running: no | kaibo review: n/a (no code changes) | workflow: memory-kernel | ts: {ts} | session: {}",
         s.session_id
     );
-    assert_eq!(line, expected, "the serialized entry is exactly the pinned format");
+    assert_eq!(
+        line, expected,
+        "the serialized entry is exactly the pinned format"
+    );
     assert_eq!(
         text.lines()
             .filter(|l| l.starts_with("Worker signoff (probe)"))
@@ -184,7 +196,11 @@ fn defaults_fill_optional_fields_and_kaibo_review_never_synthesized() {
     let dir = seeded_root("defaults");
     let mut s = handshaken_server(&dir, "probe");
 
-    match signoff_append::append_signoff(&mut s, "probe", &json!({"role": "probe", "workflow": "wf-x", "done": "no"})) {
+    match signoff_append::append_signoff(
+        &mut s,
+        "probe",
+        &json!({"role": "probe", "workflow": "wf-x", "done": "no"}),
+    ) {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(msg) => panic!("handshaken append must succeed: {msg}"),
     }
@@ -198,7 +214,10 @@ fn defaults_fill_optional_fields_and_kaibo_review_never_synthesized() {
     // running 'no'; no kaibo review field was supplied, and the server
     // NEVER synthesizes one.
     let prefix = "Worker signoff (probe) | done: no | unpushed: none | awaits human: none | still running: no | workflow: wf-x | ts: ";
-    assert!(line.starts_with(prefix), "schema defaults applied in pinned order: {line}");
+    assert!(
+        line.starts_with(prefix),
+        "schema defaults applied in pinned order: {line}"
+    );
     assert!(
         !line.contains("kaibo review"),
         "kaibo review is never synthesized by the server: {line}"
@@ -352,7 +371,10 @@ fn fresh_lock_held_refuses_after_bounded_retry() {
 
     // A FRESH lock held by a live (simulated) holder: pid/session of a
     // holder that is NOT this process, epoch = now.
-    let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let locks_dir = dir.join(".locks");
     std::fs::create_dir_all(&locks_dir).unwrap();
     let planted = format!(
@@ -397,7 +419,10 @@ fn stale_lock_taken_over_server_side() {
     // A STALE lock: its holder has been silent for 40 s (> the 30 s
     // staleness threshold) — the server detects it by age and takes it
     // over, without spending the wait budget.
-    let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let locks_dir = dir.join(".locks");
     std::fs::create_dir_all(&locks_dir).unwrap();
     let planted = format!(
@@ -417,7 +442,8 @@ fn stale_lock_taken_over_server_side() {
     );
     let text = std::fs::read_to_string(dir.join("signoff.md")).unwrap();
     assert!(
-        text.lines().any(|l| l.starts_with("Worker signoff (probe)")),
+        text.lines()
+            .any(|l| l.starts_with("Worker signoff (probe)")),
         "the append landed under the taken-over lock"
     );
     assert!(
@@ -433,13 +459,21 @@ fn stale_lock_taken_over_server_side() {
 #[test]
 fn validation_refusals_write_nothing() {
     let cases: &[(&str, serde_json::Value, &str)] = &[
-        ("missing-role", json!({"workflow": "wf", "done": "yes"}), "role"),
+        (
+            "missing-role",
+            json!({"workflow": "wf", "done": "yes"}),
+            "role",
+        ),
         (
             "missing-workflow",
             json!({"role": "probe", "done": "yes"}),
             "workflow",
         ),
-        ("missing-done", json!({"role": "probe", "workflow": "wf"}), "done"),
+        (
+            "missing-done",
+            json!({"role": "probe", "workflow": "wf"}),
+            "done",
+        ),
         (
             "done-outside-enum",
             json!({"role": "probe", "workflow": "wf", "done": "maybe"}),
@@ -470,11 +504,7 @@ fn validation_refusals_write_nothing() {
             json!({"role": "a) b", "workflow": "wf", "done": "yes"}),
             "role",
         ),
-        (
-            "non-object-args",
-            json!([1, 2]),
-            "object",
-        ),
+        ("non-object-args", json!([1, 2]), "object"),
     ];
     for (name, args, needle) in cases {
         let dir = seeded_root(name);
@@ -543,8 +573,16 @@ fn forged_reserved_field_name_after_separator_refused_zero_bytes() {
     }
     let extras: [(&str, &str, &str); 4] = [
         ("unpushed", "x |done: yes", "done:"),
-        ("still_running", "several |\tts: 2026-01-01T00:00:00Z", "ts:"),
-        ("awaits_human", "none | done: yes | still running: no", "done:"),
+        (
+            "still_running",
+            "several |\tts: 2026-01-01T00:00:00Z",
+            "ts:",
+        ),
+        (
+            "awaits_human",
+            "none | done: yes | still running: no",
+            "done:",
+        ),
         (
             "role",
             "x | workflow: other | ts: 2026-01-01T00:00:00Z",
@@ -604,7 +642,13 @@ fn values_that_add_a_reader_split_refused_zero_bytes() {
     // exempt from the three below: it fills `Worker signoff (<role>)`, which
     // the reader takes up to the closing `)` without splitting it, so a
     // leading or trailing pipe there round-trips.
-    for field in ["workflow", "unpushed", "awaits_human", "still_running", "kaibo_review"] {
+    for field in [
+        "workflow",
+        "unpushed",
+        "awaits_human",
+        "still_running",
+        "kaibo_review",
+    ] {
         for value in ["| x", "x |", "ends with a lone |"] {
             cases.push((field, value));
         }
@@ -701,7 +745,9 @@ fn fresh_root_signoff_created_on_first_write() {
 
     match signoff_append::append_signoff(&mut s, "probe", &full_args()) {
         HandlerResult::Ok(_) => {}
-        HandlerResult::Err(msg) => panic!("first write on a fresh root must create signoff.md: {msg}"),
+        HandlerResult::Err(msg) => {
+            panic!("first write on a fresh root must create signoff.md: {msg}")
+        }
     }
     let text = std::fs::read_to_string(dir.join("signoff.md")).unwrap();
     assert!(
@@ -735,7 +781,11 @@ fn missing_trailing_newline_gets_a_separator_inserted() {
     std::fs::write(dir.join("signoff.md"), partial).unwrap();
     let mut s = handshaken_server(&dir, "probe");
 
-    match signoff_append::append_signoff(&mut s, "probe", &json!({"role": "probe", "workflow": "wf-x", "done": "no"})) {
+    match signoff_append::append_signoff(
+        &mut s,
+        "probe",
+        &json!({"role": "probe", "workflow": "wf-x", "done": "no"}),
+    ) {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(msg) => panic!("append must succeed: {msg}"),
     }
@@ -770,7 +820,8 @@ fn tool_shape_is_spec_verbatim_and_dispatch_is_wired() {
     let tool = &tools[0];
     assert_eq!(tool.name, "append_signoff");
     assert!(
-        tool.description.contains("handshake incomplete — call read_signoff first"),
+        tool.description
+            .contains("handshake incomplete — call read_signoff first"),
         "the description carries the exact gate text"
     );
     assert!(
@@ -782,7 +833,10 @@ fn tool_shape_is_spec_verbatim_and_dispatch_is_wired() {
         json!(["role", "workflow", "done"])
     );
     assert_eq!(tool.input_schema["additionalProperties"], json!(false));
-    assert_eq!(tool.input_schema["properties"]["done"]["enum"], json!(["yes", "no"]));
+    assert_eq!(
+        tool.input_schema["properties"]["done"]["enum"],
+        json!(["yes", "no"])
+    );
     assert!(tool.input_schema["properties"]["kaibo_review"].is_object());
 
     // handlers(): the dispatch entry the orchestrator-owned registry
@@ -794,7 +848,10 @@ fn tool_shape_is_spec_verbatim_and_dispatch_is_wired() {
     let h = *handlers
         .get("append_signoff")
         .expect("the dispatch entry is registered under the tool name");
-    let r = h(&mut s, &json!({"role": "dispatch", "workflow": "wf-d", "done": "yes"}));
+    let r = h(
+        &mut s,
+        &json!({"role": "dispatch", "workflow": "wf-d", "done": "yes"}),
+    );
     match r {
         HandlerResult::Ok(_) => {}
         HandlerResult::Err(msg) => panic!("the wired handler must succeed: {msg}"),
@@ -823,12 +880,20 @@ fn tool_shape_is_spec_verbatim_and_dispatch_is_wired() {
 #[test]
 fn audit_tail_failure_lands_the_line_and_reports_audit_error() {
     let dir = seeded_root("f1-audit-tail");
-    std::fs::write(dir.join(".audit"), "not a directory — the audit tail must fail to land").unwrap();
+    std::fs::write(
+        dir.join(".audit"),
+        "not a directory — the audit tail must fail to land",
+    )
+    .unwrap();
     let mut s = handshaken_server(&dir, "probe");
 
     match signoff_append::append_signoff(&mut s, "probe", &full_args()) {
         HandlerResult::Ok(v) => {
-            assert_eq!(v["appended"], json!(true), "the landed write reports success: {v}");
+            assert_eq!(
+                v["appended"],
+                json!(true),
+                "the landed write reports success: {v}"
+            );
             assert!(
                 v["audit_error"].as_str().is_some_and(|e| !e.is_empty()),
                 "the missing tail is reported on the success result: {v}"
@@ -841,7 +906,8 @@ fn audit_tail_failure_lands_the_line_and_reports_audit_error() {
     }
     let text = std::fs::read_to_string(dir.join("signoff.md")).expect("the main write landed");
     assert!(
-        text.lines().any(|l| l.starts_with("Worker signoff (probe)")),
+        text.lines()
+            .any(|l| l.starts_with("Worker signoff (probe)")),
         "the signoff line is on disk while the result says success"
     );
     assert!(
@@ -860,7 +926,10 @@ fn a_healthy_append_success_carries_no_audit_error_key() {
     match signoff_append::append_signoff(&mut s, "probe", &full_args()) {
         HandlerResult::Ok(v) => {
             assert_eq!(v["appended"], json!(true));
-            assert!(v.get("audit_error").is_none(), "healthy success carries no audit_error: {v}");
+            assert!(
+                v.get("audit_error").is_none(),
+                "healthy success carries no audit_error: {v}"
+            );
             let mut keys: Vec<String> = v
                 .as_object()
                 .expect("result is an object")
@@ -870,7 +939,11 @@ fn a_healthy_append_success_carries_no_audit_error_key() {
             keys.sort();
             assert_eq!(
                 keys,
-                ["appended".to_string(), "entry".to_string(), "path".to_string()],
+                [
+                    "appended".to_string(),
+                    "entry".to_string(),
+                    "path".to_string()
+                ],
                 "the success shape without an audit failure is unchanged"
             );
         }
@@ -899,7 +972,10 @@ fn fresh_record_never_taken_over_bounded_retry_refuses() {
     let mut s = handshaken_server(&dir, "probe");
     let locks_dir = dir.join(".locks");
     std::fs::create_dir_all(&locks_dir).unwrap();
-    let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let planted = format!(
         "pid={} nonce=90210 epoch={epoch} session=s-live-holder\n",
         std::process::id() + 7
@@ -941,6 +1017,10 @@ fn read_single_audit_line(dir: &std::path::Path) -> String {
             lines.extend(text.lines().map(|l| l.to_string()));
         }
     }
-    assert_eq!(lines.len(), 1, "exactly the append's own audit entry: {lines:?}");
+    assert_eq!(
+        lines.len(),
+        1,
+        "exactly the append's own audit entry: {lines:?}"
+    );
     lines.pop().unwrap()
 }

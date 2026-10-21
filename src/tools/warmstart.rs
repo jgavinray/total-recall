@@ -49,8 +49,8 @@
 
 use std::collections::HashMap;
 use std::io::{ErrorKind, Write};
-use std::path::Path;
 use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -92,10 +92,7 @@ pub fn tools() -> Vec<Tool> {
 /// session explicitly so the gate tests can drive named sessions.
 pub fn handlers() -> HashMap<String, Handler> {
     let mut handlers: HashMap<String, Handler> = HashMap::new();
-    handlers.insert(
-        "write_warm_start".to_string(),
-        write_warm_start_handler,
-    );
+    handlers.insert("write_warm_start".to_string(), write_warm_start_handler);
     handlers
 }
 
@@ -282,10 +279,7 @@ fn split_lines(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut rest = text;
     while !rest.is_empty() {
-        let take = rest
-            .find('\n')
-            .map(|i| i + 1)
-            .unwrap_or(rest.len());
+        let take = rest.find('\n').map(|i| i + 1).unwrap_or(rest.len());
         out.push(&rest[..take]);
         rest = &rest[take..];
     }
@@ -341,7 +335,10 @@ fn locate_history(
     lines: &[&str],
     region_end: usize,
 ) -> Result<Option<(usize, usize, usize)>, String> {
-    let heading = match lines.iter().position(|line| line_content(line) == "## History") {
+    let heading = match lines
+        .iter()
+        .position(|line| line_content(line) == "## History")
+    {
         Some(h) => h,
         None => return Ok(None),
     };
@@ -401,7 +398,7 @@ fn rewrite_under_lock(root: &Path, content: &str) -> Result<Value, String> {
             "write_warm_start refused: signoff.md is not valid UTF-8 ({e}) — the warm-start region cannot be located — nothing written"
         )
     })?;
-    let lines = split_lines(&original_text);
+    let lines = split_lines(original_text);
 
     let (start, end) = match locate_region(&lines) {
         Some(r) => r,
@@ -480,7 +477,9 @@ fn rewrite_under_lock(root: &Path, content: &str) -> Result<Value, String> {
     let tmp = root.join(&tmp_name);
     if let Err(e) = std::fs::write(&tmp, intended.as_bytes()) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("write_warm_start failed: writing the tmp signoff file ({tmp_name}): {e}"));
+        return Err(format!(
+            "write_warm_start failed: writing the tmp signoff file ({tmp_name}): {e}"
+        ));
     }
     if let Err(e) = std::fs::rename(&tmp, &path) {
         let _ = std::fs::remove_file(&tmp);
@@ -496,8 +495,9 @@ fn rewrite_under_lock(root: &Path, content: &str) -> Result<Value, String> {
     // matching re-read proves the pin: every byte outside the
     // rewritten region (the non-rewritten tail — all
     // worker-signoff lines) is byte-identical to the original.
-    let re_read = std::fs::read(&path)
-        .map_err(|e| format!("write_warm_start failed: re-reading signoff.md after the rename: {e}"))?;
+    let re_read = std::fs::read(&path).map_err(|e| {
+        format!("write_warm_start failed: re-reading signoff.md after the rename: {e}")
+    })?;
     if re_read != intended.as_bytes() {
         // Something else touched the file between the rename and the
         // re-read (a non-lock-respecting writer, a torn write, a
@@ -594,7 +594,9 @@ static ACQUIRE_NONCE: AtomicU64 = AtomicU64::new(0);
 fn acquire_lock(root: &Path, session: &str) -> Result<LockToken, String> {
     let locks_dir = root.join(".locks");
     if let Err(e) = std::fs::create_dir_all(&locks_dir) {
-        return Err(format!("write_warm_start refused: cannot create .locks/: {e}"));
+        return Err(format!(
+            "write_warm_start refused: cannot create .locks/: {e}"
+        ));
     }
     let path = locks_dir.join(LOCK_NAME);
     let pid = std::process::id();
@@ -687,9 +689,7 @@ fn lock_age(path: &Path) -> Option<Duration> {
             if let Ok(holder_epoch) = raw.parse::<u64>() {
                 if let Ok(now_since) = now.duration_since(UNIX_EPOCH) {
                     if holder_epoch <= now_since.as_secs() {
-                        return Some(Duration::from_secs(
-                            now_since.as_secs() - holder_epoch,
-                        ));
+                        return Some(Duration::from_secs(now_since.as_secs() - holder_epoch));
                     }
                 }
             }
@@ -771,8 +771,7 @@ fn remove_stale_lock(path: &Path, stale: &StaleLock) -> bool {
         Ok(meta) => meta,
         Err(_) => return false,
     };
-    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime
-    {
+    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime {
         return false;
     }
     std::fs::remove_file(path).is_ok()
@@ -870,13 +869,17 @@ fn read_claim(path: &Path) -> ClaimRead {
 /// Howard Hinnant's civil-from-days integer calendar math (the crate
 /// ships no date dependency).
 fn local_date() -> Result<String, String> {
-    let (_, offset) = config::resolve_tz()
-        .map_err(|e| format!("cannot resolve the server's timezone: {e}"))?;
+    let (_, offset) =
+        config::resolve_tz().map_err(|e| format!("cannot resolve the server's timezone: {e}"))?;
     let now = match now_epoch() {
         Ok(secs) => secs + offset * 60,
         Err(msg) => return Err(msg),
     };
-    let days = if now >= 0 { now / 86_400 } else { (now - 86_399) / 86_400 };
+    let days = if now >= 0 {
+        now / 86_400
+    } else {
+        (now - 86_399) / 86_400
+    };
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -885,7 +888,11 @@ fn local_date() -> Result<String, String> {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
-    let (year, m) = if mp < 10 { (y, mp + 3) } else { (y + 1, mp - 9) };
+    let (year, m) = if mp < 10 {
+        (y, mp + 3)
+    } else {
+        (y + 1, mp - 9)
+    };
     Ok(format!("{year:04}-{:02}-{:02}", m, day))
 }
 

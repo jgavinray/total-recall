@@ -280,13 +280,17 @@ fn read_claim(path: &Path) -> ClaimRead {
 /// Howard Hinnant's civil-from-days integer calendar math (the crate
 /// ships no date dependency).
 fn local_date() -> Result<String, String> {
-    let (_, offset) = config::resolve_tz()
-        .map_err(|e| format!("cannot resolve the server's timezone: {e}"))?;
+    let (_, offset) =
+        config::resolve_tz().map_err(|e| format!("cannot resolve the server's timezone: {e}"))?;
     let now = match now_epoch() {
         Ok(secs) => secs + offset * 60,
         Err(msg) => return Err(msg),
     };
-    let days = if now >= 0 { now / 86_400 } else { (now - 86_399) / 86_400 };
+    let days = if now >= 0 {
+        now / 86_400
+    } else {
+        (now - 86_399) / 86_400
+    };
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -295,7 +299,11 @@ fn local_date() -> Result<String, String> {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
-    let (year, m) = if mp < 10 { (y, mp + 3) } else { (y + 1, mp - 9) };
+    let (year, m) = if mp < 10 {
+        (y, mp + 3)
+    } else {
+        (y + 1, mp - 9)
+    };
     Ok(format!("{year:04}-{:02}-{:02}", m, day))
 }
 
@@ -330,8 +338,9 @@ fn perform_write_brief(root: &Path, worker: &str, brief: &str) -> Result<Value, 
         // same-day supersessions can only collide when the superseded
         // files share an mtime second, and in that case the
         // no-overwrite invariant wins: refuse, nothing written.
-        let old = std::fs::read(&target)
-            .map_err(|e| format!("write_brief failed: reading the superseded briefs/{worker}.md: {e}"))?;
+        let old = std::fs::read(&target).map_err(|e| {
+            format!("write_brief failed: reading the superseded briefs/{worker}.md: {e}")
+        })?;
         let mtime = file_mtime_epoch(&target).ok_or_else(|| {
             format!("write_brief refused: cannot read the mtime of the superseded briefs/{worker}.md — no archive stamp can be rendered — nothing written")
         })?;
@@ -344,7 +353,9 @@ fn perform_write_brief(root: &Path, worker: &str, brief: &str) -> Result<Value, 
         let archive_path = briefs_dir.join(&archive_name);
         if archive_path.exists() {
             let existing = std::fs::read(&archive_path).map_err(|e| {
-                format!("write_brief failed: reading the existing archive briefs/{archive_name}: {e}")
+                format!(
+                    "write_brief failed: reading the existing archive briefs/{archive_name}: {e}"
+                )
             })?;
             if existing != old {
                 return Err(format!(

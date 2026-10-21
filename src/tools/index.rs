@@ -455,7 +455,11 @@ impl Snapshot {
     /// Narrow the candidate set: the files whose indexed lines carry a
     /// match, with the matching line numbers. `recall` still re-reads
     /// every file it is handed and decides against the live bytes.
-    pub fn candidates(&self, files: &[BucketFile], query: &Query) -> Result<Vec<Candidate>, String> {
+    pub fn candidates(
+        &self,
+        files: &[BucketFile],
+        query: &Query,
+    ) -> Result<Vec<Candidate>, String> {
         let mut out: Vec<Candidate> = Vec::new();
         for file in files {
             let Some(indexed) = self.files.get(&file.rel) else {
@@ -524,10 +528,13 @@ fn memo_key(root: &Path) -> PathBuf {
 fn memo_hit(root: &Path, live: &[Fingerprint]) -> Option<Snapshot> {
     let guard = memo().lock().ok()?;
     let snapshot = guard.get(&memo_key(root))?;
-    let all_match = live.iter().all(|entry| match snapshot.files.get(&entry.path) {
-        Some(indexed) => fingerprints_match(&indexed.fingerprint, entry),
-        None => false,
-    }) && snapshot.files.len() == live.len();
+    let all_match = live
+        .iter()
+        .all(|entry| match snapshot.files.get(&entry.path) {
+            Some(indexed) => fingerprints_match(&indexed.fingerprint, entry),
+            None => false,
+        })
+        && snapshot.files.len() == live.len();
     if all_match {
         Some(snapshot.clone())
     } else {
@@ -559,7 +566,9 @@ fn report_disagrees(root: &Path, snapshot: &Snapshot) {
         return;
     };
     for entry in entries {
-        let Some(obj) = entry.as_object() else { continue };
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
         let Some(path) = obj.get("path").and_then(Value::as_str) else {
             continue;
         };
@@ -608,7 +617,9 @@ fn persist(root: &Path, snapshot: &Snapshot) {
     let body = match serde_json::to_string_pretty(&snapshot.manifest_json(root)) {
         Ok(body) => body,
         Err(err) => {
-            eprintln!("[total-recall] index: cannot serialize the derived report: {err} — report skipped");
+            eprintln!(
+                "[total-recall] index: cannot serialize the derived report: {err} — report skipped"
+            );
             release_lock(root, &token, LOCK_NAME, "index");
             return;
         }
@@ -735,7 +746,11 @@ pub(crate) fn acquire_lock(root: &Path, lock_name: &str, who: &str) -> Result<Lo
                 }
                 std::thread::sleep(RETRY_SLEEP);
             }
-            Err(err) => return Err(format!("{who} refused: acquiring .locks/{lock_name}: {err}")),
+            Err(err) => {
+                return Err(format!(
+                    "{who} refused: acquiring .locks/{lock_name}: {err}"
+                ))
+            }
         }
     }
 }
@@ -836,8 +851,7 @@ fn remove_stale_lock(path: &Path, stale: &StaleLock) -> bool {
         Ok(meta) => meta,
         Err(_) => return false,
     };
-    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime
-    {
+    if meta.len() != stale.size || meta.ino() != stale.ino || meta.modified().ok() != stale.mtime {
         return false;
     }
     std::fs::remove_file(path).is_ok()
@@ -886,17 +900,15 @@ pub(crate) fn release_lock(root: &Path, token: &LockToken, lock_name: &str, who:
 // ---------------------------------------------------------------------------
 
 fn read_dir_sorted(dir: &Path, label: &str) -> Result<Vec<std::fs::DirEntry>, String> {
-    let entries = std::fs::read_dir(dir).map_err(|err| {
-        format!("index refused: cannot read {label} directory {dir:?}: {err}")
-    })?;
+    let entries = std::fs::read_dir(dir)
+        .map_err(|err| format!("index refused: cannot read {label} directory {dir:?}: {err}"))?;
     let mut out: Vec<std::fs::DirEntry> = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|err| {
-            format!("index refused: reading {label} directory {dir:?}: {err}")
-        })?;
+        let entry = entry
+            .map_err(|err| format!("index refused: reading {label} directory {dir:?}: {err}"))?;
         out.push(entry);
     }
-    out.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    out.sort_by_key(|a| a.file_name());
     Ok(out)
 }
 
@@ -946,12 +958,19 @@ const REP_CAP: u32 = 256;
 enum Node {
     Ch(char),
     Any,
-    Class { negated: bool, ranges: Vec<(char, char)> },
+    Class {
+        negated: bool,
+        ranges: Vec<(char, char)>,
+    },
     Start,
     End,
     Seq(Vec<Node>),
     Alt(Vec<Vec<Node>>),
-    Rep { min: u32, max: Option<u32>, node: Box<Node> },
+    Rep {
+        min: u32,
+        max: Option<u32>,
+        node: Box<Node>,
+    },
 }
 
 /// Compile a pattern to the node program. Supported: literals and

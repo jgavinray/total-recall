@@ -122,15 +122,14 @@ pub fn log_tick(server: &mut Server, session: &str, arguments: &Value) -> Handle
     }
 
     // 2. arguments — the pinned two-field shape, both required strings.
-    let args = match arguments.as_object() {
-        Some(map) => map,
-        None => {
-            return HandlerResult::Err(
+    let args =
+        match arguments.as_object() {
+            Some(map) => map,
+            None => return HandlerResult::Err(
                 "log_tick refused: arguments must be a JSON object ({\"check\": …, \"result\": …})"
                     .to_string(),
-            )
-        }
-    };
+            ),
+        };
     for key in args.keys() {
         if !matches!(key.as_str(), "check" | "result") {
             return HandlerResult::Err(format!(
@@ -357,12 +356,11 @@ fn collect_ticks(root: &Path, check: &str) -> Result<Vec<Value>, String> {
         return Ok(out);
     }
     let mut names: Vec<(String, std::path::PathBuf)> = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|err| {
-        format!("last_tick refused: cannot list {AUDIT_DIR}/: {err}")
-    })? {
-        let entry = entry.map_err(|err| {
-            format!("last_tick refused: listing {AUDIT_DIR}/: {err}")
-        })?;
+    for entry in std::fs::read_dir(&dir)
+        .map_err(|err| format!("last_tick refused: cannot list {AUDIT_DIR}/: {err}"))?
+    {
+        let entry =
+            entry.map_err(|err| format!("last_tick refused: listing {AUDIT_DIR}/: {err}"))?;
         let name = entry.file_name().to_string_lossy().to_string();
         if !name.ends_with(".jsonl") || name.starts_with('.') {
             continue;
@@ -425,7 +423,12 @@ pub fn parse_utc_iso8601(text: &str) -> Option<i64> {
         return None;
     }
     let digits = |mut r: std::ops::Range<usize>| r.all(|i| bytes[i].is_ascii_digit());
-    if !(digits(0..4) && digits(5..7) && digits(8..10) && digits(11..13) && digits(14..16) && digits(17..19))
+    if !(digits(0..4)
+        && digits(5..7)
+        && digits(8..10)
+        && digits(11..13)
+        && digits(14..16)
+        && digits(17..19))
     {
         return None;
     }
@@ -435,7 +438,11 @@ pub fn parse_utc_iso8601(text: &str) -> Option<i64> {
     let hour: u32 = text[11..13].parse().ok()?;
     let minute: u32 = text[14..16].parse().ok()?;
     let second: u32 = text[17..19].parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
     {
         return None;
     }
