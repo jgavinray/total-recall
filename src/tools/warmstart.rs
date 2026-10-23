@@ -603,10 +603,7 @@ fn acquire_lock(root: &Path, session: &str) -> Result<LockToken, String> {
     let mut attempts = 0u32;
     loop {
         attempts += 1;
-        let epoch = match now_epoch() {
-            Ok(epoch) => epoch as u64,
-            Err(msg) => return Err(msg),
-        };
+        let epoch = now_epoch()? as u64;
         let nonce = ACQUIRE_NONCE.fetch_add(1, Ordering::Relaxed);
         let token = LockToken {
             pid,
@@ -871,10 +868,7 @@ fn read_claim(path: &Path) -> ClaimRead {
 fn local_date() -> Result<String, String> {
     let (_, offset) =
         config::resolve_tz().map_err(|e| format!("cannot resolve the server's timezone: {e}"))?;
-    let now = match now_epoch() {
-        Ok(secs) => secs + offset * 60,
-        Err(msg) => return Err(msg),
-    };
+    let now = now_epoch()? + offset * 60;
     let days = if now >= 0 {
         now / 86_400
     } else {

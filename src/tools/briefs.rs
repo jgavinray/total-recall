@@ -282,10 +282,7 @@ fn read_claim(path: &Path) -> ClaimRead {
 fn local_date() -> Result<String, String> {
     let (_, offset) =
         config::resolve_tz().map_err(|e| format!("cannot resolve the server's timezone: {e}"))?;
-    let now = match now_epoch() {
-        Ok(secs) => secs + offset * 60,
-        Err(msg) => return Err(msg),
-    };
+    let now = now_epoch()? + offset * 60;
     let days = if now >= 0 {
         now / 86_400
     } else {
