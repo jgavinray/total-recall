@@ -26,6 +26,9 @@ README is a doorway, not one.
 ## Build & run
 
 ```sh
+brew install jgavinray/tap/total-recall            # installs both binaries
+
+# or from source:
 cargo build --release                              # binary: target/release/total-recall
 target/release/total-recall --root <path> --self-check
 
