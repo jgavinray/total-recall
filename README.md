@@ -28,6 +28,9 @@ README is a doorway, not one.
 ```sh
 cargo build --release                              # binary: target/release/total-recall
 target/release/total-recall --root <path> --self-check
+
+cargo install --path .                             # installs both binaries into ~/.cargo/bin
+total-recall-mcp install --root ~/dev/exomemory    # writes harness config + seeds the root
 ```
 
 `--self-check` resolves the memory root, runs the init-fingerprint startup gate,
@@ -36,8 +39,41 @@ prints one JSON line `{root, tz, tz_offset_minutes, session}` and exits 0
 2.0 over stdio; logs go to stderr. Dependencies: Rust std + `serde_json` only,
 edition 2021. The derived `.index/` is a cache — rebuildable, never truth.
 
-Register in `~/.omp/agent/mcp.json` under `mcpServers` — this shape is taken
-from the real file (which also carries an unrelated `kaibo` registration):
+## Harness setup
+
+`total-recall-mcp` is the launcher-side helper. It is a separate binary, not an
+MCP tool: it writes the server entry into each harness's own config, provisions
+the memory root, and seeds `signoff.md` when absent. It is idempotent, backs up
+any file it rewrites, and `--dry-run` touches no disk.
+
+```sh
+# all four harnesses, using the default root (~/dev/exomemory)
+total-recall-mcp install
+
+# explicit root and only one harness
+total-recall-mcp install --root ~/dev/my-memory --harness omp
+
+# inspect the snippets without writing
+total-recall-mcp print --root ~/dev/my-memory
+```
+
+Supported config files:
+
+| Harness | File | Shape |
+|---|---|---|
+| omp | `~/.omp/agent/mcp.json` | `mcpServers` (stdio) |
+| Pi | `~/.pi/agent/mcp.json` | `mcpServers` (`exposure: "direct"`) |
+| Claude Code | `~/.claude.json` | top-level `mcpServers` (user scope) |
+| Codex | `~/.codex/config.toml` | `[mcp_servers.total-recall]` |
+
+`install` refuses a `--root` that disagrees with `EXOMEMORY_DIR` (spec §6's
+two-plane agreement) unless `--force` is given. Restart the harness after
+installing. The first call in every session is `read_signoff`; omp exposes it
+as `mcp__total_recall_read_signoff`, other harnesses typically as
+`mcp__total_recall__read_signoff`.
+
+Manual registration remains valid — this shape is taken from the real omp file
+(which also carries an unrelated `kaibo` registration):
 
 ```json
 "total-recall": {
@@ -72,7 +108,9 @@ deployment's working entry lives in `~/.omp/agent/mcp.json`.
    1. Nothing is in flight. Read this, work, sign off before you stop.
    ```
 
-3. Register the server (snippet above) and start a session on that root.
+3. Register the server (`total-recall-mcp install --root <path>`, or the
+   snippet above) and start a session on that root. The helper seeds a missing
+   `signoff.md`; a hand seed is equally valid.
 4. First call, always: `mcp__total_recall_read_signoff` — it grants the
    handshake; every gated tool refuses until it has succeeded this session.
    Only `read_signoff`, `recall`, `last_tick`, `session_compliance` are ungated.
@@ -89,7 +127,7 @@ deployment's working entry lives in `~/.omp/agent/mcp.json`.
 
 ## Tests
 
-`cargo test` — currently 135 passing across 15 test binaries. Known flake: the
+`cargo test` — currently 155 passing across 16 test binaries. Known flake: the
 real-time lock/race assertions in `tests/signoff_append_tests.rs` (bounded
 retry ~5 s, stale-lock takeover < 4 s) can fail under heavy machine load; they
 pass in isolation.
@@ -100,6 +138,7 @@ pass in isolation.
 |---|---|
 | `spec.md` | the binding contract (v0.3) |
 | `src/` | server implementation (`main.rs`, `rpc.rs`, `gate.rs`, `config.rs`, `tools/`) |
+| `src/bin/total-recall-mcp.rs` | launcher-side harness config helper |
 | `tests/` | enforcement gates (`gate_w1..w4`, `rpc_tests`) + per-module tests |
 | `docs/workflows.md` | mermaid diagrams of the enforcement plane |
 | `signoffs/` | review artifacts produced by the guard/human path, not by the server |

@@ -35,7 +35,7 @@ Orientation for an agent editing this software (not using it — for that, read
 
 ## Verification bar
 
-- Per change: `cargo test` (135 passing, 15 binaries; the real-time lock/race
+- Per change: `cargo test` (155 passing, 16 binaries; the real-time lock/race
   test in `signoff_append_tests.rs` can flake under load, passes in isolation).
 - Release changes: `cargo build --release` and run
   `target/release/total-recall --root <path> --self-check` (one JSON line, exit 0).
