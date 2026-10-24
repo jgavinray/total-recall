@@ -1,0 +1,13 @@
+# Commit-message rules for `committed` (crate-ci/committed), run in CI by
+# .github/workflows/commits.yml. Only the Conventional Commits format is
+# enforced: `type(scope)!: description`, with a type from the list below.
+# committed's extra style rules (subject length, capitalization, imperative
+# mood, punctuation, body wrapping) are turned off; fixup! and WIP commits
+# are still refused.
+style = "conventional"
+allowed_types = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test"]
+subject_length = 0
+line_length = 0
+subject_capitalized = false
+imperative_subject = false
+subject_not_punctuated = false

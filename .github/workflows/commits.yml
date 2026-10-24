@@ -1,0 +1,46 @@
+# Check that new commits follow Conventional Commits (committed.toml).
+# Every non-merge commit a push to main or a pull request adds is checked;
+# history from before this workflow is not.
+name: Commit messages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COMMITTED_VERSION: 1.1.11
+
+jobs:
+  conventional:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # committed is built from crates.io source (checksum-verified, --locked)
+      # rather than downloaded as a release binary; the cache keeps the build
+      # to the first run of each version.
+      - name: Cache committed
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.cargo/bin/committed
+          key: committed-${{ env.COMMITTED_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install committed
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cargo install --locked committed --version "$COMMITTED_VERSION"
+      - name: Check commit messages
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
+        run: bash .github/scripts/check-commits.sh "$BASE" "$HEAD"
