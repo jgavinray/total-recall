@@ -43,6 +43,11 @@ Orientation for an agent editing this software (not using it — for that, read
 - Surface changes (descriptions, refusals, tool shapes): a naive-model smoke —
   drive the binary over stdio with a naive client and confirm the refusal
   texts route a model that follows them literally to the right exit.
+- CI (`.github/workflows/`) runs the per-change checks on every push to main
+  and every pull request: build and test on Linux and macOS, `cargo fmt
+  --check`, `cargo clippy --all-targets -- -D warnings`, and the commit-message
+  check below. CI does not replace the review gate or the naive-model smoke:
+  both need the local model fleet, which CI cannot reach.
 
 ## Review gate
 
@@ -62,6 +67,14 @@ Orientation for an agent editing this software (not using it — for that, read
   `jgavinray/total-recall`); pushing publishes, so only the human pushes. The
   orchestrator commits locally — workers leave the tree dirty unless told
   otherwise.
+- Every new commit message follows Conventional Commits
+  (<https://www.conventionalcommits.org/en/v1.0.0/>): `type(scope)!: description`,
+  with type one of `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
+  `refactor`, `revert`, `style`, `test` (`committed.toml`). CI checks every
+  non-merge commit a push or pull request adds; merge commits and the history
+  before 2026-10-24 are not checked. To check before committing:
+  `committed --config committed.toml HEAD` (install with
+  `cargo install --locked committed`).
 
 ## Where knowledge lives
 
