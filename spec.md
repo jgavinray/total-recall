@@ -80,7 +80,7 @@ Mapping — only the rules the server OWNS (each rule marked OWNED here, everyth
 ```json
 {
   "name": "read_signoff",
-  "description": "MANDATORY FIRST CALL of every session. Returns the signoff.md warm-start block, the ranked 'if you read nothing else' list, and worker signoffs. RECORDS the session handshake: no mutating tool is accepted until this call returns successfully. Contract: first action of every session; no work before it returns.",
+  "description": "MANDATORY FIRST CALL of every session. Returns the signoff.md warm-start block, the ranked 'if you read nothing else' list, the newest superseded block from History, and the newest 20 worker signoffs, with counts of all of them (older ones: `recall`, scope 'signoff'). RECORDS the session handshake: no mutating tool is accepted until this call returns successfully. Contract: first action of every session; no work before it returns.",
   "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
 }
 ```
@@ -88,20 +88,23 @@ Example result:
 ```json
 {
   "path": "<configured root>/signoff.md",
-  "as_of": "2026-09-13T08:14:02Z",
   "warm_start": {
     "header": "2026-09-13",
+    "history_total": 1,
     "ranked": [
       {"rank": 1, "text": "Upstream docs PR: docstring-coverage warning fixed; the references-post awaits human approval"},
       {"rank": 2, "text": "Parser golden-suite green at HEAD; packaging decision awaits human"}
     ],
-    "history": ["(superseded blocks, newest last)"]
+    "history": ["(the newest superseded block)"]
   },
   "worker_signoffs": [
     {"worker": "docs-capture", "ts": "2026-09-12T23:41:07Z", "done": "yes", "workflow": "memory-kernel"}
-  ]
+  ],
+  "worker_signoffs_total": 1,
+  "as_of": "2026-09-13T08:14:02Z"
 }
 ```
+**Read window (amended 2026-10-24).** `worker_signoffs` holds the newest 20 parsed entries in file order (appends land at EOF, so the newest are last); `worker_signoffs_total` counts every parsed entry. `warm_start.history` holds the newest superseded block: `write_warm_start` appends each block at the end of History (newest last) with its own `## If you read nothing else` line (any ASCII case, as the writer finds the heading), so the read returns the History entries from the last such line through the end of the section (anything appended after that block comes with it), starting one entry earlier when that entry is the block's `Last updated:` header. A History with no such line (hand-written prose) is returned whole. `warm_start.history_total` counts every History entry. Nothing is deleted: older entries stay on disk, untouched, and are read through `recall` (scope `signoff`). Reason, measured 10/24/2026 on the reference deployment (morning snapshot, 174 signoff lines: a 167,421-byte result, 48–52k prompt tokens): with the full list GLM 5.3 Flash never finished answering "what is waiting on the owner" (cut off at 32,768 output tokens) and Qwen3.8 Flash-Next resurfaced up to 6 superseded asks, while on a ~6k-token window (the ranked list, the newest History block, the recent signoffs) every model answered with the current items only. The shipped window, rerun on an afternoon snapshot of the same root, made a 23,647-byte read (6.8–7.4k prompt tokens; the unwindowed read of that snapshot is 171,758 bytes): DeepSeek V4.1 Flash, GLM 5.3 Flash and Qwen3.8 Flash-Next each answered (170–342 s), each found the one current owner item, and none took an item from the returned History block; the remaining extra items came from in-window signoffs whose `awaits human` was never closed. Key order is part of the result's readability, not its meaning: `ranked` precedes `history`, and `as_of` (signoff.md's mtime) is serialized last so the stable bytes before it stay a reusable prompt-cache prefix.
 
 ### append_signoff
 ```json

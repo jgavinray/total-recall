@@ -4,17 +4,19 @@
 //! `.state/sessions.json` via `crate::gate::handshake` when — and
 //! only when — this call returns successfully.
 //!
-//! The result carries the signoff.md path, the file's mtime as
-//! `as_of` (the age of the data — the same mtime convention
-//! `recall` uses for its excerpts), the warm-start block, and the
-//! worker signoffs:
+//! The result carries the signoff.md path, the warm-start block with
+//! the newest superseded block from History, the newest
+//! [`SIGNOFF_WINDOW`] worker signoffs, a count of every History entry
+//! and signoff, and the file's mtime as `as_of` (the age of the data —
+//! the same mtime convention `recall` uses for its excerpts):
 //!
 //! ```json
 //! {
 //!   "path": "<configured root>/signoff.md",
-//!   "as_of": "2026-09-13T08:14:02Z",
-//!   "warm_start": {"header": "…", "ranked": [{"rank": 1, "text": "…"}], "history": ["…"]},
-//!   "worker_signoffs": [{"worker": "…", "done": "…", …}]
+//!   "warm_start": {"header": "…", "history_total": 1, "ranked": [{"rank": 1, "text": "…"}], "history": ["…"]},
+//!   "worker_signoffs": [{"worker": "…", "done": "…", …}],
+//!   "worker_signoffs_total": 1,
+//!   "as_of": "2026-09-13T08:14:02Z"
 //! }
 //! ```
 //!
@@ -65,13 +67,24 @@ use serde_json::{json, Value};
 use crate::gate;
 use crate::rpc::{self, HandlerResult, Server, Tool};
 
+/// How many worker signoffs a read returns: the newest ones, in file
+/// order (appends land at EOF, so the newest are last). The full log
+/// stays on disk and `recall` (scope `signoff`) still searches all of it.
+/// Measured 10/24/2026 on the reference root (afternoon snapshot, 169
+/// parsed signoffs): the whole log made a 171,758-byte read (48–52k prompt
+/// tokens on a morning snapshot), on which local models either ran out of
+/// output budget or resurfaced superseded asks; this window made a
+/// 23,647-byte read (about 7k tokens), on which every model answered and
+/// none took an item from a superseded block.
+pub const SIGNOFF_WINDOW: usize = 20;
+
 /// The `read_signoff` tool shape advertised by `tools/list` — the
 /// description carries the MANDATORY contract text (spec §4), and the
 /// input schema is the pinned empty-object shape (spec §3).
 pub fn tools() -> Vec<Tool> {
     vec![Tool {
         name: "read_signoff".to_string(),
-        description: "MANDATORY FIRST CALL of every session. No work before it returns: it gives you what the team knows NOW — the signoff.md warm-start block, the ranked 'if you read nothing else' list, and worker signoffs; for dated facts from the past use `recall` instead (this answers 'what matters right now', recall answers 'what was true when'). RECORDS the session handshake: no mutating tool and no claim_orchestrator is accepted until this call returns successfully. When a gated tool answers 'handshake incomplete — call read_signoff first', call this, then retry that tool once. A missing or unreadable signoff.md is an error and grants NO handshake — fix the file rather than retrying the call order.".to_string(),
+        description: format!("MANDATORY FIRST CALL of every session. No work before it returns: it gives you what the team knows NOW — the signoff.md warm-start block, the ranked 'if you read nothing else' list, the newest superseded block from History, and the newest {SIGNOFF_WINDOW} worker signoffs (`history_total` and `worker_signoffs_total` count all of them; find older ones with `recall`, scope 'signoff'); for dated facts from the past use `recall` instead (this answers 'what matters right now', recall answers 'what was true when'). RECORDS the session handshake: no mutating tool and no claim_orchestrator is accepted until this call returns successfully. When a gated tool answers 'handshake incomplete — call read_signoff first', call this, then retry that tool once. A missing or unreadable signoff.md is an error and grants NO handshake — fix the file rather than retrying the call order."),
         input_schema: json!({
             "type": "object",
             "properties": {},
@@ -132,15 +145,18 @@ pub fn read_signoff(server: &mut Server, session: &str) -> HandlerResult {
     if !gate::handshake(server, session) {
         return HandlerResult::Err("read_signoff failed: the handshake record could not be persisted to .state/sessions.json (I/O error — see the server log) — the session is NOT handshaken; no mutating tool is accepted until this call returns successfully".to_string());
     }
+    let total = parsed.worker_signoffs.len();
     HandlerResult::Ok(json!({
         "path": path.display().to_string(),
         "as_of": as_of,
         "warm_start": json!({
             "header": parsed.header,
             "ranked": parsed.ranked,
-            "history": parsed.history
+            "history": newest_history_block(&parsed.history),
+            "history_total": parsed.history.len()
         }),
-        "worker_signoffs": parsed.worker_signoffs
+        "worker_signoffs": parsed.worker_signoffs[total.saturating_sub(SIGNOFF_WINDOW)..],
+        "worker_signoffs_total": total
     }))
 }
 
@@ -236,6 +252,29 @@ fn parse_history(lines: &[&str]) -> Vec<String> {
         })
         .filter(|entry| !entry.is_empty())
         .collect()
+}
+
+/// The newest superseded block in History, the part of it a read
+/// returns. `write_warm_start` appends each block at the section's end
+/// (newest last) as `- ` entries that include the block's own
+/// `## If you read nothing else` heading line (in any ASCII case, as the
+/// writer finds the heading), preceded by its `Last updated:` header when
+/// it had one, so the last such heading starts the newest block. A History with no such heading (hand-written
+/// prose) has no boundary to cut at and is returned whole.
+fn newest_history_block(history: &[String]) -> &[String] {
+    let Some(heading) = history
+        .iter()
+        .rposition(|entry| entry.eq_ignore_ascii_case("## If you read nothing else"))
+    else {
+        return history;
+    };
+    // Case-sensitive, as in write_warm_start: it moves a header line with
+    // its block only when the line starts with exactly `Last updated:`, so
+    // an entry in any other case belongs to the block before.
+    match heading.checked_sub(1) {
+        Some(header) if history[header].starts_with("Last updated:") => &history[header..],
+        _ => &history[heading..],
+    }
 }
 
 /// A numbered line `N. text` inside the warm-start block: rank = N,

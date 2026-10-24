@@ -244,6 +244,81 @@ fn read_signoff_on_sectionless_file_succeeds_with_empty_sections() {
 }
 
 #[test]
+fn read_signoff_returns_the_newest_window_and_counts_every_signoff() {
+    let dir = tmp_root("window");
+    let total = signoff_read::SIGNOFF_WINDOW + 5;
+    let mut seed = String::from(
+        "# Signoff\n\n## If you read nothing else\n1. **Item** — prose\n\n## Worker sessions — sign off here as you go\n\n",
+    );
+    for i in 0..total {
+        seed.push_str(&format!(
+            "Worker signoff (worker-{i:02}) | done: yes | unpushed: none | awaits human: none | still running: no\n"
+        ));
+    }
+    let mut s = fresh_server(&dir, &seed);
+    let v = match signoff_read::read_signoff(&mut s, "probe") {
+        HandlerResult::Ok(v) => v,
+        HandlerResult::Err(e) => panic!("read_signoff failed: {e}"),
+    };
+    let ws = v["worker_signoffs"].as_array().unwrap();
+    assert_eq!(ws.len(), signoff_read::SIGNOFF_WINDOW, "{v}");
+    assert_eq!(v["worker_signoffs_total"], total);
+    // The newest are the last lines of the file, kept in file order.
+    assert_eq!(ws[0]["worker"], "worker-05");
+    assert_eq!(
+        ws[ws.len() - 1]["worker"],
+        format!("worker-{:02}", total - 1)
+    );
+
+    // A signoff outside the window is still on disk and found by recall.
+    let text = call_text(
+        &mut s,
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recall","arguments":{"query":"(worker-00)","scope":"signoff"}}}"#,
+    );
+    let found: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(found["count"], 1, "{text}");
+}
+
+/// Two blocks in write_warm_start's History format (newest last), after
+/// a hand-written entry.
+const SEED_HISTORY: &str = "# Signoff\n\nLast updated: 2026-09-14\n\n## If you read nothing else\n1. **Current** — prose\n\n## History\n- hand-written note\n- Last updated: 2026-09-12\n- ## If you read nothing else\n- 1. **Older** — prose\n- Last updated: 2026-09-13\n- ## If you read nothing else\n- 1. **Newer** — prose\n";
+
+#[test]
+fn read_signoff_returns_only_the_newest_history_block_and_counts_every_entry() {
+    let dir = tmp_root("history-window");
+    let mut s = fresh_server(&dir, SEED_HISTORY);
+    let v = match signoff_read::read_signoff(&mut s, "probe") {
+        HandlerResult::Ok(v) => v,
+        HandlerResult::Err(e) => panic!("read_signoff failed: {e}"),
+    };
+    assert_eq!(
+        v["warm_start"]["history"],
+        json!([
+            "Last updated: 2026-09-13",
+            "## If you read nothing else",
+            "1. **Newer** — prose"
+        ])
+    );
+    assert_eq!(v["warm_start"]["history_total"], 7);
+}
+
+#[test]
+fn history_block_without_a_header_line_starts_at_its_heading() {
+    let dir = tmp_root("history-headerless");
+    let seed = "# Signoff\n\n## If you read nothing else\n1. **Current** — prose\n\n## History\n- older prose\n- ## If you read nothing else\n- 1. **Newest** — prose\n";
+    let mut s = fresh_server(&dir, seed);
+    let v = match signoff_read::read_signoff(&mut s, "probe") {
+        HandlerResult::Ok(v) => v,
+        HandlerResult::Err(e) => panic!("read_signoff failed: {e}"),
+    };
+    assert_eq!(
+        v["warm_start"]["history"],
+        json!(["## If you read nothing else", "1. **Newest** — prose"])
+    );
+    assert_eq!(v["warm_start"]["history_total"], 3);
+}
+
+#[test]
 fn gate_refuses_before_handshake_counts_and_releases_after() {
     let dir = tmp_root("gate");
     let mut s = fresh_server(&dir, SEED_FULL);
