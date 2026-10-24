@@ -1,0 +1,11 @@
+# Dependabot keeps the SHA-pinned GitHub Actions current, with the version
+# in each pin's trailing comment. Its commit messages start with "ci: " so
+# they pass the Conventional Commits check.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
