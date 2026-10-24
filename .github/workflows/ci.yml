@@ -12,8 +12,10 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the older run. Each push to main gets
+# its own group and runs to completion, so no pushed commit goes unchecked.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 env:
