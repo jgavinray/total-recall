@@ -277,3 +277,44 @@ fn fingerprint_named_for_another_root_is_refused() {
     );
     clear_root_env();
 }
+
+#[cfg(unix)]
+#[test]
+fn symlinked_spelling_of_the_same_root_is_accepted() {
+    let _g = env_guard();
+    let dir = tmp_root("symlinked");
+    config::init_state(&dir).unwrap();
+    let link = dir.with_file_name(format!(
+        "{}-link",
+        dir.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&dir, &link).unwrap();
+    let result = config::init_state(&link);
+    let _ = std::fs::remove_file(&link);
+    assert!(
+        result.is_ok(),
+        "two spellings of one directory are the same root: {result:?}"
+    );
+    clear_root_env();
+}
+
+#[test]
+fn copied_root_whose_recorded_path_still_exists_is_refused() {
+    let _g = env_guard();
+    let original = tmp_root("copied-original");
+    let copy = tmp_root("copied-copy");
+    config::init_state(&original).unwrap();
+    std::fs::create_dir_all(copy.join(".state")).unwrap();
+    std::fs::copy(
+        original.join(".state/init.json"),
+        copy.join(".state/init.json"),
+    )
+    .unwrap();
+    let err = config::init_state(&copy).unwrap_err();
+    assert!(
+        err.contains("root"),
+        "a copied root must refuse loudly even though the original still exists: {err}"
+    );
+    clear_root_env();
+}

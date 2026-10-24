@@ -392,3 +392,57 @@ fn tools_and_handlers_advertise_read_signoff_per_spec() {
         "the handler handshakes the server's own session"
     );
 }
+
+/// The `text` of a tools/call success frame.
+fn call_text(s: &mut Server, frame: &str) -> String {
+    let out = total_recall::rpc::handle_frame(s, frame).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    v["result"]["content"][0]["text"]
+        .as_str()
+        .expect("a success frame carries one text item")
+        .to_string()
+}
+
+#[test]
+fn read_signoff_text_puts_ranked_before_history_and_as_of_last() {
+    let dir = tmp_root("order");
+    let mut s = fresh_server(&dir, SEED_FULL);
+    let text = call_text(
+        &mut s,
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_signoff","arguments":{}}}"#,
+    );
+    let pos = |key: &str| {
+        text.find(&format!("\"{key}\":"))
+            .unwrap_or_else(|| panic!("{key} missing from {text}"))
+    };
+    assert!(
+        pos("ranked") < pos("history"),
+        "the current list must come before the superseded blocks: {text}"
+    );
+    for key in ["path", "warm_start", "worker_signoffs"] {
+        assert!(
+            pos(key) < pos("as_of"),
+            "as_of must follow {key}, so the bytes before it stay a cacheable prefix: {text}"
+        );
+    }
+    // Reordering changes bytes, not meaning.
+    let reparsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(reparsed["warm_start"]["ranked"].is_array());
+    assert_eq!(reparsed["worker_signoffs"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn results_without_reordered_keys_serialize_as_before() {
+    let dir = tmp_root("bytes");
+    let mut s = fresh_server(&dir, SEED_FULL);
+    let text = call_text(
+        &mut s,
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"recall","arguments":{"query":"First item"}}}"#,
+    );
+    let reparsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        text,
+        serde_json::to_string(&reparsed).unwrap(),
+        "a result with no history/as_of key must be byte-identical to serde_json's output"
+    );
+}

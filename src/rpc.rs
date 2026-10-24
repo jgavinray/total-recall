@@ -98,7 +98,7 @@ pub type Handler = fn(&mut Server, &Value) -> HandlerResult;
 ///
 /// `Ok(value)` is wrapped at the tools/call dispatch point ONLY into the
 /// MCP-mandatory success envelope
-/// `{content: [{type:"text", text: serde_json::to_string(value)}]}` — no
+/// `{content: [{type:"text", text: render_result(value)}]}` — no
 /// `isError` on success (the handlers themselves return these raw values
 /// UNCHANGED; their module-level tests depend on that). `Err(msg)` becomes
 /// a NORMAL result carrying `{isError: true, content: [{type:"text",
@@ -197,6 +197,58 @@ fn generate_session_id() -> String {
     format!("s-{mixed:08x}")
 }
 
+/// Keys written after every other key of their object, in this order.
+/// `history` (superseded warm-start blocks) follows `ranked`, so a reader
+/// meets the current list first (spec §3's read_signoff example order).
+/// `as_of` (signoff.md's mtime, which moves on every write) goes last, so
+/// the unchanged bytes before it stay a reusable prompt-cache prefix on the
+/// model server; a changed value near the start forces the server to
+/// re-read the whole result. Every other key keeps
+/// serde_json's alphabetical order, so a result without these keys
+/// serializes byte-for-byte as `serde_json::to_string` would.
+const KEYS_LAST: &[&str] = &["history", "as_of"];
+
+/// Serialize a handler's success value as compact JSON with [`KEYS_LAST`]
+/// applied to every object.
+fn render_result(value: &Value) -> Result<String, serde_json::Error> {
+    let mut out = String::new();
+    write_ordered(value, &mut out)?;
+    Ok(out)
+}
+
+fn write_ordered(value: &Value, out: &mut String) -> Result<(), serde_json::Error> {
+    match value {
+        Value::Object(map) => {
+            // The map iterates alphabetically; a stable sort on the
+            // KEYS_LAST position keeps that order for every other key.
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_by_key(|key| KEYS_LAST.iter().position(|last| last == key));
+            out.push('{');
+            for (i, key) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::to_string(key)?);
+                out.push(':');
+                write_ordered(&map[key.as_str()], out)?;
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_ordered(item, out)?;
+            }
+            out.push(']');
+        }
+        scalar => out.push_str(&serde_json::to_string(scalar)?),
+    }
+    Ok(())
+}
+
 /// Dispatch one newline-delimited JSON-RPC 2.0 frame.
 ///
 /// `Ok(frame)` is a response frame to write to stdout — except the empty
@@ -276,7 +328,7 @@ pub fn handle_frame(server: &mut Server, frame: &str) -> Result<String, String> 
                             // its serialization. The envelope is built
                             // HERE and only here; handlers return raw
                             // values. No `isError` on success.
-                            HandlerResult::Ok(result) => match serde_json::to_string(&result) {
+                            HandlerResult::Ok(result) => match render_result(&result) {
                                 Ok(text) => Ok(json!({
                                     "content": [{"type": "text", "text": text}],
                                 })),

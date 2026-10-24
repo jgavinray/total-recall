@@ -345,3 +345,30 @@ fn existing_configs_are_backed_up_before_rewrite() {
         .collect();
     assert_eq!(backups.len(), 1, "one backup expected, got {backups:?}");
 }
+
+#[cfg(unix)]
+#[test]
+fn dry_run_accepts_an_env_root_spelled_through_a_symlink() {
+    let dir = tmp_root("env-symlink");
+    let real = dir.join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let mut args = install_args(&dir);
+    args.push("--dry-run".to_string());
+    // --root names real/memory, which does not exist yet; EXOMEMORY_DIR
+    // names the same directory through the symlink.
+    let i = args.iter().position(|a| a == "--root").unwrap();
+    args[i + 1] = real.join("memory").display().to_string();
+    let out = Command::new(helper())
+        .args(&args)
+        .env("EXOMEMORY_DIR", link.join("memory"))
+        .env_remove("EXO_DIR")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "one directory under two spellings is not a disagreement: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

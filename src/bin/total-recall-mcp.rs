@@ -345,9 +345,29 @@ fn absolute(path: PathBuf) -> Result<PathBuf, String> {
             .map(|cwd| cwd.join(path))
             .map_err(|e| format!("cannot resolve relative path: {e}"))?
     };
-    // Resolve `./` and symlinks when the path exists; keep the lexical
-    // path otherwise (a config or root may be created later).
-    Ok(joined.canonicalize().unwrap_or(joined))
+    Ok(canonicalize_existing_prefix(&joined))
+}
+
+/// Resolve `./` and symlinks in the part of `path` that exists and keep the
+/// missing tail as written (a config or root may be created later), so a
+/// path spells the same before and after it is created — macOS's
+/// `/var` -> `/private/var` otherwise rewrites every harness entry on the
+/// second install.
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    let mut tail = Vec::new();
+    let mut base = path;
+    loop {
+        if let Ok(resolved) = base.canonicalize() {
+            return tail.iter().rev().fold(resolved, |acc, part| acc.join(part));
+        }
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_os_string());
+                base = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// Refuse a `--root` that disagrees with the guard's `EXOMEMORY_DIR`
@@ -360,8 +380,8 @@ fn check_env_root(root: &Path, force: bool) -> Result<(), String> {
         return Ok(());
     }
     let env_path = PathBuf::from(raw.trim());
-    let env_path = env_path.canonicalize().unwrap_or(env_path);
-    let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let env_path = canonicalize_existing_prefix(&env_path);
+    let root_path = canonicalize_existing_prefix(root);
     if root_path != env_path && !force {
         return Err(format!(
             "--root {} disagrees with EXOMEMORY_DIR {} — the omp guard and the server must share one root (spec §6); set both to the same path or pass --force",

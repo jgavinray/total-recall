@@ -333,7 +333,7 @@ pub fn init_state(root: &Path) -> Result<(), String> {
                 ))
             }
         };
-        if old.root != abs.display().to_string() {
+        if old.root != abs.display().to_string() && !same_dir(Path::new(&old.root), &abs) {
             return Err(format!(
                 "refusing to start: {} names memory root '{}' but this directory resolves to '{}' — the fingerprint is keyed to its directory; if the root was moved or copied, delete .state/init.json and re-init",
                 state_path.display(),
@@ -367,6 +367,21 @@ pub fn init_state(root: &Path) -> Result<(), String> {
     std::fs::write(&state_path, format!("{text}\n"))
         .map_err(|e| format!("cannot write {}: {e}", state_path.display()))?;
     Ok(())
+}
+
+/// Two spellings of one directory (a symlinked parent, such as macOS's
+/// `/var` -> `/private/var`) name the same root; a moved or copied root does
+/// not, because its recorded path no longer resolves to this directory. The
+/// recorded path must be absolute: a relative one would resolve against the
+/// process cwd, not the root.
+fn same_dir(recorded: &Path, current: &Path) -> bool {
+    if !recorded.is_absolute() {
+        return false;
+    }
+    match (recorded.canonicalize(), current.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
 }
 
 /// The on-disk fingerprint. Parsed by hand (no serde derive — the
