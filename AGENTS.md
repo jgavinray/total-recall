@@ -35,8 +35,9 @@ Orientation for an agent editing this software (not using it — for that, read
 
 ## Verification bar
 
-- Per change: `cargo test` (155 passing, 16 binaries; the real-time lock/race
-  test in `signoff_append_tests.rs` can flake under load, passes in isolation).
+- Per change: `cargo test` (163 passing, 18 binaries, as of 2026-10-24; the
+  real-time lock/race test in `signoff_append_tests.rs` can flake under load,
+  passes in isolation).
 - Release changes: `cargo build --release` and run
   `target/release/total-recall --root <path> --self-check` (one JSON line, exit 0).
 - Surface changes (descriptions, refusals, tool shapes): a naive-model smoke —
@@ -46,9 +47,10 @@ Orientation for an agent editing this software (not using it — for that, read
 ## Review gate
 
 - A signoff may not claim `done: yes` without the DeepSeek-cluster verdict,
-  per the global rule: route the review through
-  `~/.omp/agent/skills/deepseek-code-review/SKILL.md` (subagent pinned to
-  `spark-vllm/DeepSeek-v4.1-Flash-EXL3`).
+  per the global rule: send the diff to `local-deepseek/DeepSeek-V4.1-Flash-1017`
+  (`~/.omp/agent/models.yml`) with omp's reviewer prompt,
+  `~/.omp/agent/agents/code-reviewer.md`. The old `spark-vllm` lane and its
+  skill file are gone (cutover 2026-10-19).
 - Cluster etiquette: serial calls, ≤4 chat/completions requests per review
   round, one retry on timeout, then fail loudly — never substitute the session
   model's opinion and call it DeepSeek's.
@@ -61,7 +63,7 @@ Orientation for an agent editing this software (not using it — for that, read
 
 ## Where knowledge lives
 
-- Durable state goes to `~/dev/exomemory/signoff.md` (verbatim
+- Durable state goes to `~/exomemory/signoff.md` (verbatim
   `Worker signoff (<role>)` line via `append_signoff`) and the OKF wiki at
-  `~/dev/exomemory/wiki/` — never transcripts. Verify by FILE, never by
+  `~/exomemory/wiki/` — never transcripts. Verify by FILE, never by
   session memory.
