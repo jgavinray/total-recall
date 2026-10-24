@@ -58,8 +58,10 @@ Orientation for an agent editing this software (not using it — for that, read
 ## Commits
 
 - `git commit --no-gpg-sign`. NEVER add a `Co-Authored-By` trailer (hard human
-  rule, 2026-09-14). The repo has no remote; the orchestrator commits — workers
-  leave the tree dirty unless told otherwise.
+  rule, 2026-09-14). The repo has a GitHub remote (`origin`,
+  `jgavinray/total-recall`); pushing publishes, so only the human pushes. The
+  orchestrator commits locally — workers leave the tree dirty unless told
+  otherwise.
 
 ## Where knowledge lives
 
