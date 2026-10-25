@@ -199,9 +199,7 @@ fn generate_session_id() -> String {
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
     let seq = INSTANCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u32;
-    let mixed = ((std::process::id() as u64)
-        .wrapping_mul(0x9E37_79B9)
-        ^ nanos) as u32
+    let mixed = ((std::process::id() as u64).wrapping_mul(0x9E37_79B9) ^ nanos) as u32
         ^ seq.wrapping_mul(0x9E37_79B9);
     format!("s-{mixed:08x}")
 }
