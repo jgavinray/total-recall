@@ -28,8 +28,16 @@ fn helper() -> &'static str {
     env!("CARGO_BIN_EXE_total-recall-mcp")
 }
 
-fn server() -> &'static str {
-    env!("CARGO_BIN_EXE_total-recall")
+fn server() -> String {
+    // The install flow records the CANONICALIZED binary path
+    // (canonicalize_existing_prefix — symlink-proof by design), so the
+    // expectation must be canonical too. On macOS the compile-time cargo
+    // path crosses /tmp -> /private/tmp, where the verbatim
+    // CARGO_BIN_EXE string differs from the recorded one.
+    std::fs::canonicalize(env!("CARGO_BIN_EXE_total-recall"))
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_BIN_EXE_total-recall")))
+        .display()
+        .to_string()
 }
 
 fn run(args: &[String]) -> Output {
