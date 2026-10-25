@@ -1,0 +1,30 @@
+# Release management per docs/release-management-spec.md: one standing
+# release PR; merging it lands the version bump (Cargo.toml, Cargo.lock,
+# CHANGELOG.md), and the next run after that merge tags vX.Y.Z and creates
+# the GitHub release. The version source is the in-repo manifest — crates.io
+# is never consulted (the crate name there belongs to another project).
+# The Homebrew tap bump stays manual until a tap token exists (spec Q3).
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release-type: rust
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
