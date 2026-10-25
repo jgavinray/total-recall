@@ -15,7 +15,6 @@
 //!   isError:true + content array (never a JSON-RPC error object).
 //! - Fresh configured root starts EMPTY: only `.state/` exists after init.
 
-use serde_json::json;
 use total_recall::config::{self, ConfigArgs};
 use total_recall::rpc::{self, Server};
 
