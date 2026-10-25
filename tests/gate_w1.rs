@@ -86,26 +86,31 @@ fn resolve_root_two_env_names_differing_is_loud() {
 
 #[test]
 fn init_state_writes_fingerprint_and_refuses_tz_change() {
+    env_acquire();
+    // Pin the box's zone through the documented EXO_TZ override so the
+    // test is deterministic on every machine — including UTC-configured
+    // runners, where a forged "UTC"/0 record silently matched the real
+    // zone and nothing was refused.
+    std::env::set_var("EXO_TZ", "America/New_York");
     let dir = tmp_root("tz");
     config::init_state(&dir).unwrap();
     let st = dir.join(".state/init.json");
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&st).unwrap())
         .expect(".state/init.json must be valid JSON");
     assert_eq!(v["root"], dir.display().to_string());
-    assert!(v["tz"].is_string() && !v["tz"].as_str().unwrap().is_empty());
+    assert_eq!(v["tz"], "America/New_York", "the override must be recorded");
     assert!(v["tz_offset_minutes"].is_i64());
     assert!(v["created_at"].is_string());
 
-    // A later start that sees a DIFFERENT zone/offset for the same root refuses loudly.
-    let mut forged = v.clone();
-    forged["tz"] = json!("UTC");
-    forged["tz_offset_minutes"] = json!(0);
-    std::fs::write(&st, forged.to_string()).unwrap();
+    // A later start that sees a DIFFERENT zone for the same root refuses loudly.
+    std::env::set_var("EXO_TZ", "UTC");
     let err = config::init_state(&dir).unwrap_err();
     assert!(
         err.contains("timezone") || err.contains("zone"),
         "mismatch must be loud: {err}"
     );
+    std::env::remove_var("EXO_TZ");
+    env_release();
 }
 
 #[test]
