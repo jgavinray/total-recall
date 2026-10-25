@@ -185,15 +185,24 @@ pub fn new_server(root: &Path) -> Server {
 }
 
 /// Generate the process-local session id: `s-` + 8 hex digits, mixed from
-/// the pid and a monotonic clock reading — unique per process start without
-/// any entropy dependency (Rust std + serde_json only). Matches the
-/// reference format in spec §3 (`s-7c1f9d2e`).
+/// the pid, a monotonic clock reading, and a per-instance counter — unique
+/// per SERVER INSTANCE, not just per process start, without any entropy
+/// dependency (Rust std + serde_json only). The counter term is injective
+/// (odd multiplier is a bijection on u32), so two servers constructed in
+/// the same process on the same nanosecond tick — e.g. the racing-append
+/// test's threads — can never collide on a stamp. Matches the reference
+/// format in spec §3 (`s-7c1f9d2e`).
 fn generate_session_id() -> String {
+    static INSTANCE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    let mixed = ((std::process::id() as u64).wrapping_mul(0x9E37_79B9) ^ nanos) as u32;
+    let seq = INSTANCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u32;
+    let mixed = ((std::process::id() as u64)
+        .wrapping_mul(0x9E37_79B9)
+        ^ nanos) as u32
+        ^ seq.wrapping_mul(0x9E37_79B9);
     format!("s-{mixed:08x}")
 }
 
