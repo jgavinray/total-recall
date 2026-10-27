@@ -1,9 +1,12 @@
-# Release management per docs/release-management-spec.md: one standing
-# release PR; merging it lands the version bump (Cargo.toml, Cargo.lock,
-# CHANGELOG.md), and the next run after that merge tags vX.Y.Z and creates
-# the GitHub release. The version source is the in-repo manifest — crates.io
-# is never consulted (the crate name there belongs to another project).
-# The Homebrew tap bump stays manual until a tap token exists (spec Q3).
+# Release per pull request: the version lives in the pull request itself.
+# A PR that means to release bumps `version` in Cargo.toml (and Cargo.lock —
+# CI's --locked enforces the sync) and adds its own `## [X.Y.Z]` section to
+# CHANGELOG.md. Merging it is the release decision: this workflow tags
+# vX.Y.Z at the merged commit and publishes the GitHub release with that
+# changelog section as its notes. A merge that does not change the version
+# is a no-op, and a version that is already tagged is never re-released.
+# No third-party release tool and no PR creation: the tag and the release
+# use the built-in token's `contents: write`.
 name: Release
 
 on:
@@ -13,18 +16,51 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
-  release-please:
+  tag-and-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          release-type: rust
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+      - name: Read the version from Cargo.toml
+        id: version
+        run: |
+          v=$(awk '/^\[package\]/{f=1} f && /^version = /{print; exit}' Cargo.toml \
+              | sed -E 's/version = "(.*)"/\1/')
+          if [ -z "$v" ]; then
+            echo "::error::cannot read the package version from Cargo.toml"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+      - name: Skip when this version is already tagged
+        id: check
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "tag ${{ steps.version.outputs.tag }} already exists — nothing to release"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Extract the changelog section for this version
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          awk -v ver="${{ steps.version.outputs.version }}" \
+              '$0 ~ "^## \\[" ver "\\]" {found=1; next} found && /^## \[/ {exit} found {print}' \
+              CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for ${{ steps.version.outputs.version }} — a version-bump pull request must carry its changelog entry"
+            exit 1
+          fi
+      - name: Tag and publish the GitHub release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --notes-file notes.md
