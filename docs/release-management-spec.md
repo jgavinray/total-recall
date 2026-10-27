@@ -1,16 +1,59 @@
-# Release management workflow — proposal for review
+# Release management workflow — proposal and implemented design
 
-Status: **proposal, not implemented.** Written 2026-10-24 for the owner's review.
-Nothing here is built until the owner approves it and answers the open questions
-at the end.
+Status: **reviewed and approved by the owner 2026-10-27.** The implemented design
+is the manual workflow in the section of that name below; the release-please
+proposal that follows it is the 2026-10-24 history, kept for the record — it was
+built, blocked on an owner-only repository setting, and superseded by the
+owner's ruling that releases are tagged manually, on demand. Written 2026-10-24.
 
 ## Goal
 
-The owner's request: "a workflow that will open a pull request and continually add
-commits to it for release management/tagging."
+The owner's request, as it evolved:
 
-So: one standing release pull request that tracks `main`. Merging it bumps the
-version, updates a changelog, tags the release and creates a GitHub release.
+- 2026-10-24: "a workflow that will open a pull request and continually add
+  commits to it for release management/tagging."
+- 2026-10-27, final: releases are **tagged manually, on demand** — the owner
+  controls the version and sees the full release notes before anything is
+  published.
+
+## Implemented design (2026-10-27)
+
+`.github/workflows/release.yml`, `workflow_dispatch` only — nothing runs on a
+push, nothing opens pull requests, no third-party release tool is involved, and
+the repository setting "Allow GitHub Actions to create and approve pull
+requests" is irrelevant to releases.
+
+Inputs at dispatch:
+
+- `version` (required): semver; must EQUAL the `version` in `Cargo.toml`. The
+  bump itself — `Cargo.toml`, `Cargo.lock` (CI's `--locked` enforces the sync),
+  and an optional `CHANGELOG.md` section — lands as a normal pull request
+  first. A version that is already tagged is refused, so nothing is released
+  twice.
+- `notes` (optional): pasted markdown wins; otherwise the `## [X.Y.Z]` section
+  of `CHANGELOG.md`; otherwise notes built from the commits since the last tag,
+  grouped Features / Bug Fixes / Other Changes.
+- `publish` (default off): a dry run builds the notes, prints them into the
+  run summary, and tags nothing. Checked, it runs
+  `gh release create vX.Y.Z --target <run commit>` with those notes — tag and
+  GitHub release in one step, using only the built-in token's
+  `contents: write`.
+
+The Homebrew formula (`jgavinray/homebrew-tap`, `Formula/total-recall.rb`)
+stays a manual follow-up: each release needs its `url` and `sha256` updated to
+the new tag's tarball.
+
+Verified 2026-10-27 by running the workflow file itself through the GitHub
+Actions runner simulator (`act`) against a sandbox clone: the dry run builds
+the notes, prints them into the run summary, and tags nothing; a version
+mismatch and an already-tagged version each fail with their exact `::error::`
+message; `publish` gates the tag/release step, which fires only when checked
+(the simulated image lacked `gh`; GitHub's runners ship it). The dispatch
+itself is owner-triggered from the Actions UI.
+
+---
+
+# The 2026-10-24 proposal (history; superseded)
 
 ## Facts this proposal rests on (checked 2026-10-24)
 
