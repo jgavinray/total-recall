@@ -1,57 +1,103 @@
-# Release management with release-please (docs/release-management-spec.md).
+# Manual release: you trigger it, you see the notes, you publish.
 #
-# Model: once a version is pinned, release-please opens one standing release
-# PR for that version and keeps it up to date as further work lands on main —
-# the PR is the tag's staging area (changelog + Cargo.toml + Cargo.lock).
-# Merging it bumps the version, tags vX.Y.Z, and publishes the GitHub release.
+# Run: Actions → Release → Run workflow.
+#   version  e.g. 0.2.0 — must match Cargo.toml (bump it, and Cargo.lock, in a
+#            pull request first; CI's --locked enforces the lock sync).
+#   notes    optional markdown; empty builds them from the CHANGELOG.md
+#            section for that version, else from the commits since the last tag.
+#   publish  unchecked = dry run: builds and shows the notes in the run
+#            summary, tags nothing. Check it to tag v<version> at the run's
+#            commit and create the GitHub release with those notes.
 #
-# Pinning a version, either way lands a `Release-As: x.y.z` commit on main,
-# which release-please reads on every run — so the pin survives later pushes:
-#   - Actions → Release → Run workflow, `version` = e.g. 0.2.0 (this workflow
-#     creates the empty commit for you), or
-#   - `git commit --allow-empty -m "chore: release 0.2.0" -m "Release-As: 0.2.0"`
-#
-# Requires the repository setting "Allow GitHub Actions to create and approve
-# pull requests" (Settings → Actions → General → Workflow permissions).
-# With the built-in token, CI does not run on the release PR itself; CI still
-# runs on main after the merge.
+# No pull request is created and no third-party release tool is involved, so
+# this needs nothing beyond the built-in token's `contents: write` — in
+# particular, the repository setting "Allow GitHub Actions to create and
+# approve pull requests" is irrelevant here.
 name: Release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to pin for the next release (e.g. 0.2.0). Leave empty to just refresh the release PR."
+        description: "Version to release (e.g. 0.2.0) — must match Cargo.toml; becomes tag v<version>"
+        required: true
+        type: string
+      notes:
+        description: "Release notes (markdown). Leave empty to build them from CHANGELOG.md or the commits since the last tag."
         required: false
-        default: ""
+        type: string
+      publish:
+        description: "Publish: tag and create the GitHub release. Leave unchecked for a dry run that only shows the notes."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
 
 jobs:
-  release-please:
+  release:
     runs-on: ubuntu-latest
     steps:
-      - name: Pin the version
-        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' \
+            || { echo "::error::'$VERSION' is not a semver version"; exit 1; }
+          cargo_version=$(awk '/^\[package\]/{f=1} f && /^version = /{print; exit}' Cargo.toml \
+              | sed -E 's/version = "(.*)"/\1/')
+          if [ "$VERSION" != "$cargo_version" ]; then
+            echo "::error::Cargo.toml says $cargo_version but the input says $VERSION — bump the version (and Cargo.lock) in a pull request first"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::v$VERSION is already tagged — pick a new version"
+            exit 1
+          fi
+      - name: Build the release notes
+        env:
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          if [ -n "$NOTES" ]; then
+            printf '%s\n' "$NOTES" > notes.md
+          elif [ -f CHANGELOG.md ] && \
+               awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {found=1; next} found && /^## \[/ {exit} found {print}' \
+                 CHANGELOG.md > notes.md && [ -s notes.md ]; then
+            : # the changelog section for this version
+          else
+            last_tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+            range=${last_tag:+$last_tag..HEAD}
+            {
+              echo "## Features"
+              git log ${range:-HEAD} --pretty='- %s' --grep='^feat' || true
+              echo
+              echo "## Bug Fixes"
+              git log ${range:-HEAD} --pretty='- %s' --grep='^fix' || true
+              echo
+              echo "## Other Changes"
+              git log ${range:-HEAD} --pretty='- %s' | grep -Ev '^- (feat|fix)' || true
+            } > notes.md
+          fi
+          {
+            echo "### Release notes for v$VERSION (built from: $([ -n "$NOTES" ] && echo input || echo changelog-or-commits))"
+            echo
+            cat notes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "----- notes.md -----"
+          cat notes.md
+      - name: Tag and publish
+        if: inputs.publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
         run: |
-          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' \
-            || { echo "::error::version '$VERSION' is not a semver version"; exit 1; }
-          git clone --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" repo
-          cd repo
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit --allow-empty -m "chore: release $VERSION" -m "Release-As: $VERSION"
-          git push origin HEAD:main
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --notes-file notes.md
