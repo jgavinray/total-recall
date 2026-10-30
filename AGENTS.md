@@ -76,6 +76,29 @@ Orientation for an agent editing this software (not using it — for that, read
   `committed --config committed.toml HEAD` (install with
   `cargo install --locked committed`).
 
+## Releases
+
+Releases are manual and owner-triggered. Agents never create tags or releases
+by hand — `.github/workflows/release.yml` does it:
+
+1. The version bump is its own commit or pull request: `version` in
+   `Cargo.toml` and the matching entry in `Cargo.lock` (CI's `--locked`
+   enforces the sync), plus — optionally — a `## [X.Y.Z]` section in
+   `CHANGELOG.md`, which becomes the release notes. Without that section the
+   workflow builds the notes from the commits since the last tag.
+2. The human dispatches Actions → Release → Run workflow with that version:
+   `publish` unchecked is a dry run that prints the notes into the run
+   summary and tags nothing; checked, it tags `vX.Y.Z` at the run's commit and
+   creates the GitHub release. The workflow refuses a version that differs
+   from `Cargo.toml` or is already tagged.
+3. The Homebrew formula (`jgavinray/homebrew-tap`, `Formula/total-recall.rb`)
+   is a manual follow-up: update its `url` and `sha256` to the new tag's
+   tarball.
+
+Do not run `git tag` or `gh release create` outside that workflow, and do not
+bundle the version bump with product changes — the bump commit is what the tag
+names, so it should carry exactly the released tree.
+
 ## Where knowledge lives
 
 - Durable state goes to `~/exomemory/signoff.md` (verbatim
