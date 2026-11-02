@@ -11,8 +11,10 @@
 //!   overrides (two planes on two directories is the misconfiguration
 //!   the spec refuses);
 //! - an existing init fingerprint for the same root recording a
-//!   DIFFERENT timezone/offset → `Err` (a mixed-TZ multi-box shared
-//!   root is a misconfiguration, not a supported mode);
+//!   DIFFERENT timezone → `Err` (a mixed-TZ multi-box shared root is
+//!   a misconfiguration, not a supported mode). A different UTC
+//!   offset under the SAME zone is the calendar, not a misconfigura-
+//!   tion — DST — and is refreshed in place, never refused;
 //! - an `EXO_TZ` override the system tz database does not know → `Err`
 //!   (an unrecognized zone makes `date` fall back to UTC silently on
 //!   both macOS and glibc, which would mislabel day boundaries instead
@@ -296,10 +298,15 @@ fn parse_utc_offset(raw: &str) -> Result<i64, String> {
 /// - fresh root: creates `.state/` and writes `init.json` — nothing
 ///   else. A fresh configured root starts EMPTY; every other bucket is
 ///   created-on-first-write;
-/// - same root, same zone/offset: idempotent, no rewrite;
-/// - same root with a DIFFERENT zone/offset: refuses loudly — a mixed-TZ
-///   multi-box shared root is a misconfiguration, not a supported mode
-///   (spec §2 timezone/day boundary);
+/// - same root, same zone and offset: idempotent, no rewrite;
+/// - same root, same zone, drifted offset (DST, clock
+///   reconfiguration): the recorded offset is refreshed in place —
+///   atomic rewrite, original `created_at` preserved. Refusing would
+///   wedge every DST-zone root twice a year (the reported load
+///   failure);
+/// - same root with a DIFFERENT zone: refuses loudly — a mixed-TZ
+///   shared root is a misconfiguration, not a supported mode (spec §2
+///   timezone/day boundary);
 /// - a fingerprint that names a DIFFERENT root: refuses loudly (the
 ///   directory was moved or copied — the keying would silently lie).
 ///
@@ -341,9 +348,9 @@ pub fn init_state(root: &Path) -> Result<(), String> {
                 abs.display()
             ));
         }
-        if old.tz != tz || old.tz_offset_minutes != offset {
+        if old.tz != tz {
             return Err(format!(
-                "refusing to start: timezone change for memory root '{}' — {} records timezone '{}' (UTC offset {} min, created {}) but this box now resolves '{}' (UTC offset {} min). A mixed-TZ multi-box shared root is a misconfiguration, not a supported mode; if the box legitimately changed zone, delete .state/init.json and re-init",
+                "timezone change for memory root '{}' — {} records timezone '{}' (UTC offset {} min, created {}) but this box now resolves '{}' (UTC offset {} min). A mixed-TZ multi-box shared root is a misconfiguration, not a supported mode; if the box legitimately changed zone, delete .state/init.json and re-init",
                 abs.display(),
                 state_path.display(),
                 old.tz,
@@ -353,20 +360,81 @@ pub fn init_state(root: &Path) -> Result<(), String> {
                 offset
             ));
         }
+        if old.tz_offset_minutes != offset {
+            // Same zone, drifted UTC offset: the calendar moved — DST,
+            // twice a year, or a clock reconfiguration — not the
+            // configuration. This is the reported load failure: the
+            // old check refused every start until the fingerprint was
+            // deleted. Refresh the recorded offset in place instead; a
+            // stale offset is what would mislabel day boundaries. The
+            // rewrite carries the original root/zone/`created_at` and
+            // goes through the same atomic tmp+rename as the fresh
+            // path, so a concurrent reader never sees torn JSON.
+            write_fingerprint(
+                &state_path,
+                &Fingerprint {
+                    root: old.root,
+                    tz: old.tz,
+                    tz_offset_minutes: offset,
+                    created_at: old.created_at,
+                },
+            )
+            .map_err(|e| {
+                format!(
+                    "cannot refresh the recorded UTC offset in {}: {e}",
+                    state_path.display()
+                )
+            })?;
+        }
         return Ok(());
     }
 
+    write_fingerprint(
+        &state_path,
+        &Fingerprint {
+            root: abs.display().to_string(),
+            tz,
+            tz_offset_minutes: offset,
+            created_at: now_utc_iso8601(),
+        },
+    )?;
+    Ok(())
+}
+
+/// Writes the fingerprint through a per-pid tmp file + rename, both in
+/// the target directory: the rename is atomic on the same filesystem,
+/// so a concurrent reader — another server instance starting, or
+/// `claims::local_date` on a live process — sees the previous bytes or
+/// the complete new ones, never torn JSON (a torn fingerprint would
+/// refuse every later start). The tmp file is removed on every failure
+/// path.
+fn write_fingerprint(path: &Path, fingerprint: &Fingerprint) -> Result<(), String> {
     let doc = json!({
-        "root": abs.display().to_string(),
-        "tz": tz,
-        "tz_offset_minutes": offset,
-        "created_at": now_utc_iso8601(),
+        "root": fingerprint.root,
+        "tz": fingerprint.tz,
+        "tz_offset_minutes": fingerprint.tz_offset_minutes,
+        "created_at": fingerprint.created_at,
     });
     let text = serde_json::to_string_pretty(&doc)
         .map_err(|e| format!("cannot serialize the init fingerprint: {e}"))?;
-    std::fs::write(&state_path, format!("{text}\n"))
-        .map_err(|e| format!("cannot write {}: {e}", state_path.display()))?;
-    Ok(())
+    let tmp = path.with_file_name(format!(
+        ".{}.tmp-{}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("init.json"),
+        std::process::id()
+    ));
+    let written = (|| -> Result<(), String> {
+        std::fs::write(&tmp, format!("{text}\n"))
+            .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .map_err(|e| format!("cannot rename {} into place: {e}", tmp.display()))?;
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// Two spellings of one directory (a symlinked parent, such as macOS's

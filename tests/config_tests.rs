@@ -16,6 +16,8 @@
 //!   zone change for the same root refusing loudly (and rewriting
 //!   nothing), a matching re-init staying idempotent, and an unknown
 //!   zone refusing loudly instead of falling back to UTC;
+//! - a same-zone UTC-offset drift (DST) refreshing the recorded
+//!   offset in place — never refusing, original stamp preserved;
 //! - the fresh-root INVENTORY (exactly `.state/`, containing exactly
 //!   `init.json`) — the gate asserts per-file absence, this asserts
 //!   the full listing;
@@ -203,6 +205,59 @@ fn exo_tz_override_honored_mismatch_refused_unknown_zone_loud() {
         err.contains("EXO_TZ"),
         "an unknown zone must be named in the refusal: {err}"
     );
+    clear_root_env();
+}
+
+#[test]
+fn same_zone_offset_drift_is_refreshed_not_refused() {
+    let _g = env_guard();
+    let dir = tmp_root("dstdrift");
+    clear_root_env();
+    std::env::set_var("EXO_TZ", "America/New_York");
+
+    config::init_state(&dir).expect("fresh init records the zone");
+    let live = config::resolve_tz().expect("live tz").1;
+    let path = dir.join(".state").join("init.json");
+
+    // Both DST directions: the recorded offset an hour either side of
+    // the zone's current offset, zone name unchanged — the exact
+    // on-disk shape a DST transition leaves behind, and the reported
+    // load failure (every start refused until the fingerprint was
+    // deleted). A same-zone drift refreshes in place, never refuses.
+    for drifted in [live + 60, live - 60] {
+        let before: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut planted = before.clone();
+        planted["tz_offset_minutes"] = serde_json::json!(drifted);
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(&planted).unwrap()),
+        )
+        .unwrap();
+
+        config::init_state(&dir).expect("same-zone offset drift refreshes, never refuses");
+
+        let after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            after["tz_offset_minutes"],
+            serde_json::json!(live),
+            "the drift must be refreshed to the zone's current offset"
+        );
+        assert_eq!(
+            after["tz"], planted["tz"],
+            "zone name preserved by the refresh"
+        );
+        assert_eq!(
+            after["root"], planted["root"],
+            "root preserved by the refresh"
+        );
+        assert_eq!(
+            after["created_at"], planted["created_at"],
+            "the original creation stamp survives the refresh"
+        );
+    }
+
     clear_root_env();
 }
 

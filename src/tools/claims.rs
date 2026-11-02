@@ -164,7 +164,11 @@ fn write_dayfile_handler(server: &mut Server, arguments: &Value) -> HandlerResul
 /// the per-call resolution is pure arithmetic (no `date` subprocess
 /// per call). A root whose fingerprint is missing (a test that built
 /// the server without init) falls back to resolving the zone live —
-/// the same call `init_state` would have recorded.
+/// the same call `init_state` would have recorded. The recorded
+/// offset is refreshed by `init_state` at every server start (a
+/// same-zone drift — DST — is rewritten in place, never refused), so
+/// it is current as of the most recent start; a process that itself
+/// spans a transition keeps its start-time offset until the next.
 pub fn local_date(root: &Path) -> Result<String, String> {
     let offset = match read_recorded_offset(root) {
         Some(offset) => offset,
