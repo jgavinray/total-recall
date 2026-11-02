@@ -44,11 +44,10 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use serde_json::{json, Map, Value};
 
-use crate::config;
 use crate::gate;
 use crate::rpc::{Handler, HandlerResult, Server, Tool};
 
@@ -124,7 +123,7 @@ pub fn write_brief(server: &mut Server, session: &str, args: &Value) -> HandlerR
     }
 
     let root = server.root.clone();
-    let date = match local_date() {
+    let date = match crate::tools::claims::local_date(&root) {
         Ok(d) => d,
         Err(msg) => return HandlerResult::Err(msg),
     };
@@ -270,51 +269,6 @@ fn read_claim(path: &Path) -> ClaimRead {
         },
         _ => ClaimRead::Orphan,
     }
-}
-
-/// The server's LOCAL date (`YYYY-MM-DD`), derived the way the gate
-/// derives it (the contract: "derived the way the gate does from the
-/// root's tz fingerprint" — the gate's own `local_date` uses
-/// `config::resolve_tz()`, which is keyed to the root's fingerprint
-/// at init): the epoch clock shifted by the timezone offset, and
-/// Howard Hinnant's civil-from-days integer calendar math (the crate
-/// ships no date dependency).
-fn local_date() -> Result<String, String> {
-    let (_, offset) =
-        config::resolve_tz().map_err(|e| format!("cannot resolve the server's timezone: {e}"))?;
-    let now = now_epoch()? + offset * 60;
-    let days = if now >= 0 {
-        now / 86_400
-    } else {
-        (now - 86_399) / 86_400
-    };
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = era * 400 + yoe;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let (year, m) = if mp < 10 {
-        (y, mp + 3)
-    } else {
-        (y + 1, mp - 9)
-    };
-    Ok(format!("{year:04}-{:02}-{:02}", m, day))
-}
-
-/// Seconds since the Unix epoch, `Err` (refuse loudly) when the
-/// system clock predates the epoch — a negative stamp would
-/// silently mislabel day boundaries.
-fn now_epoch() -> Result<i64, String> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .map_err(|_| {
-            "the system clock is before the Unix epoch — refusing to stamp (refuse loudly)"
-                .to_string()
-        })
 }
 
 /// The disk work, reached only after the gate, the argument
