@@ -219,6 +219,13 @@ fn same_zone_offset_drift_is_refreshed_not_refused() {
     let live = config::resolve_tz().expect("live tz").1;
     let path = dir.join(".state").join("init.json");
 
+    // A symlinked alias for the root: recorded under the alias, a
+    // re-derivation would write the resolved path and fail the root
+    // assert — the preservation check bites (review DstFix F2).
+    let alias = dir.with_extension("drift-alias");
+    let _ = std::fs::remove_file(&alias);
+    std::os::unix::fs::symlink(&dir, &alias).unwrap();
+
     // Both DST directions: the recorded offset an hour either side of
     // the zone's current offset, zone name unchanged — the exact
     // on-disk shape a DST transition leaves behind, and the reported
@@ -229,6 +236,10 @@ fn same_zone_offset_drift_is_refreshed_not_refused() {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let mut planted = before.clone();
         planted["tz_offset_minutes"] = serde_json::json!(drifted);
+        // A stamp no wall-clock second shares: a re-stamp cannot pass
+        // the created_at assert vacuously (review DstFix F1).
+        planted["created_at"] = serde_json::json!("2020-01-01T00:00:00Z");
+        planted["root"] = serde_json::json!(alias.display().to_string());
         std::fs::write(
             &path,
             format!("{}\n", serde_json::to_string_pretty(&planted).unwrap()),
@@ -258,6 +269,54 @@ fn same_zone_offset_drift_is_refreshed_not_refused() {
         );
     }
 
+    let _ = std::fs::remove_file(&alias);
+    clear_root_env();
+}
+
+#[test]
+fn refresh_failure_on_unwritable_state_refuses_loudly() {
+    let _g = env_guard();
+    let dir = tmp_root("dstdriftfail");
+    clear_root_env();
+    std::env::set_var("EXO_TZ", "America/New_York");
+
+    config::init_state(&dir).unwrap();
+    let path = dir.join(".state").join("init.json");
+    // Drift the offset, then take the write bit from .state/: the
+    // refresh cannot land and must refuse loudly, naming the operation
+    // and the path, leaving the planted bytes untouched (review
+    // DstFix F3).
+    let before: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut planted = before.clone();
+    planted["tz_offset_minutes"] =
+        serde_json::json!(before["tz_offset_minutes"].as_i64().unwrap() + 60);
+    std::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(&planted).unwrap()),
+    )
+    .unwrap();
+
+    use std::os::unix::fs::PermissionsExt;
+    let state_dir = dir.join(".state");
+    let restore = std::fs::metadata(&state_dir).unwrap().permissions();
+    let mut readonly = restore.clone();
+    readonly.set_mode(0o555);
+    std::fs::set_permissions(&state_dir, readonly).unwrap();
+
+    let err = config::init_state(&dir).unwrap_err();
+    assert!(
+        err.contains("cannot refresh") && err.contains("init.json"),
+        "the refusal must name the operation and the path: {err}"
+    );
+    let after: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        after, planted,
+        "a failed refresh leaves the fingerprint byte-identical"
+    );
+
+    let _ = std::fs::set_permissions(&state_dir, restore);
     clear_root_env();
 }
 

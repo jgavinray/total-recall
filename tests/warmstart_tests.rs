@@ -37,7 +37,6 @@
 
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 use total_recall::config;
 use total_recall::rpc::{HandlerResult, Server};
 use total_recall::tools::warmstart;
@@ -97,36 +96,11 @@ Worker signoff (alpha) | done: yes | unpushed: none | awaits human: none | still
 - 2. **Second item** — prose two
 "#;
 
-/// The server's LOCAL date — the same derivation the gate uses
-/// (`config::resolve_tz()` + Howard Hinnant civil-from-days integer
-/// math), so the claim-file name these tests plant is never pinned
-/// to a date the box's local calendar can drift past.
-fn local_date() -> String {
-    let (_, offset) = config::resolve_tz().unwrap();
-    let now = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
-        + offset * 60;
-    let days = if now >= 0 {
-        now / 86_400
-    } else {
-        (now - 86_399) / 86_400
-    };
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = era * 400 + yoe;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let (year, m) = if mp < 10 {
-        (y, mp + 3)
-    } else {
-        (y + 1, mp - 9)
-    };
-    format!("{year:04}-{:02}-{:02}", m, day)
+/// The gate's own date — `crate::tools::claims::local_date`, derived
+/// from the RECORDED fingerprint offset — so the claim-file name these
+/// tests plant is derived exactly the way the gate derives it.
+fn local_date(root: &Path) -> String {
+    total_recall::tools::claims::local_date(root).unwrap()
 }
 
 /// The gate's fixture: fresh tmp root + init fingerprint + the SEED
@@ -154,7 +128,7 @@ fn plant_claim_file(root: &Path, session: &str, token: &str) {
         "acquired_at": "2026-09-14T00:00:00Z"
     });
     std::fs::write(
-        dir.join(format!("orchestrator-{}", local_date())),
+        dir.join(format!("orchestrator-{}", local_date(&dir))),
         v.to_string(),
     )
     .unwrap();

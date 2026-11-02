@@ -342,7 +342,7 @@ pub fn init_state(root: &Path) -> Result<(), String> {
         };
         if old.root != abs.display().to_string() && !same_dir(Path::new(&old.root), &abs) {
             return Err(format!(
-                "refusing to start: {} names memory root '{}' but this directory resolves to '{}' — the fingerprint is keyed to its directory; if the root was moved or copied, delete .state/init.json and re-init",
+                "{} names memory root '{}' but this directory resolves to '{}' — the fingerprint is keyed to its directory; if the root was moved or copied, delete .state/init.json and re-init",
                 state_path.display(),
                 old.root,
                 abs.display()
@@ -370,6 +370,8 @@ pub fn init_state(root: &Path) -> Result<(), String> {
             // rewrite carries the original root/zone/`created_at` and
             // goes through the same atomic tmp+rename as the fresh
             // path, so a concurrent reader never sees torn JSON.
+            // Unknown fingerprint keys are not preserved: the file is
+            // crate-canonical four-field.
             write_fingerprint(
                 &state_path,
                 &Fingerprint {
@@ -406,8 +408,9 @@ pub fn init_state(root: &Path) -> Result<(), String> {
 /// so a concurrent reader — another server instance starting, or
 /// `claims::local_date` on a live process — sees the previous bytes or
 /// the complete new ones, never torn JSON (a torn fingerprint would
-/// refuse every later start). The tmp file is removed on every failure
-/// path.
+/// refuse every later start). The tmp file is removed on every
+/// survivable failure path — a SIGKILL can strand it, and the next
+/// same-pid init reuses the name.
 fn write_fingerprint(path: &Path, fingerprint: &Fingerprint) -> Result<(), String> {
     let doc = json!({
         "root": fingerprint.root,
@@ -427,8 +430,13 @@ fn write_fingerprint(path: &Path, fingerprint: &Fingerprint) -> Result<(), Strin
     let written = (|| -> Result<(), String> {
         std::fs::write(&tmp, format!("{text}\n"))
             .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
-        std::fs::rename(&tmp, path)
-            .map_err(|e| format!("cannot rename {} into place: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| {
+            format!(
+                "cannot rename {} into place as {}: {e}",
+                tmp.display(),
+                path.display()
+            )
+        })?;
         Ok(())
     })();
     if written.is_err() {
